@@ -7,7 +7,8 @@
 
 //============ EVENT TYPES ==========
 enum class EventType {
-    PhotoTaken,         
+    PhotoTaken,
+    MotionCaptured,         
     NeedTelem,          
     DeploymentTriggered, 
     Command,
@@ -21,6 +22,10 @@ enum class EventType {
 //=========== PAYLOAD TYPES ===========
 struct EvPhotoTaken {
     std::string path;      // e.g., "/data/imgs/pic_001.jpg"
+};
+
+struct EvMotionCaptured {
+    std::string path;
 };
 
 struct EvDeploymentTriggered {
@@ -51,6 +56,7 @@ struct EvCommandFailed { uint16_t correlation_id; std::string reason; };
 //======= WRAPPER =======
 using EventPayload = std::variant<
     EvPhotoTaken, 
+    EvMotionCaptured,
     EvDeploymentTriggered, 
     EvCommand, 
     EvTelemetryRequest,

@@ -272,6 +272,17 @@ int main() {
                 std::cout << "[MAIN] DEPLOY" << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
+                imu.triggerCapture(10000);
+                break;
+            }
+            
+            case EventType::MotionCaptured:{
+                const auto& m = std::get<EvMotionCaptured>(e.data);
+                std::string path = m.path;
+                setTimeout([path,&comms](){
+                    std::cout << "[MAIN] Got mocap event, for path " << path << std::endl;
+                    system((std::string("scp ") + path + " pi@10.42.0.1:/home/pi/startup.csv").c_str());
+                }, std::chrono::milliseconds(1));
                 break;
             }
 

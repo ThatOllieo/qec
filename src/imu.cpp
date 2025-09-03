@@ -1,6 +1,7 @@
 #include "../include/imu.hpp"
 
 #include <iostream>
+#include <fstream>
 #include <chrono>
 #include <thread>
 
@@ -52,7 +53,7 @@ void IMU::stop() {
     if (!running_) return;
     running_ = false;
     if (th_.joinable()) th_.join();
-
+    if (file.is_open()) file.close();
     // Clean up GPIO resources
 }
 
@@ -126,6 +127,11 @@ IMU::Vector3 IMU::getLinearAccel() {
     return { x / 100.0, y / 100.0, z / 100.0 };
 }
 
+void IMU::triggerCapture(int milliseconds){
+    t = milliseconds;
+    a = 1;
+}
+
 void IMU::loop() {
     // Open I2C device file
     fd_ = open(I2C_BUS, O_RDWR);
@@ -147,12 +153,54 @@ void IMU::loop() {
         close(fd_);
         return;
     }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Wait 20 ms after mode change
 
     //while (running_) {
-    while(false){
+    while(running_){
+        if(a == 1){
 
-        //you can put stuff here if you like
+            file.open("/home/pi/startup.csv", std::ios::out | std::ios::trunc);
+            if (!file.is_open()) {
+                std::perror("Failed to open output file");
+                return;
+            }
+            auto start_time = std::chrono::steady_clock::now();
+            file << "time_ms,ax,ay,az,h,r,p\n";
+            file.setf(std::ios::fixed);
+            file << std::setprecision(4);
+
+            while(a == 1){
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
+                if(elapsed <= t){
+                    Vector3 dat = getLinearAccel();
+                    EulerAngles dat2 = getEulerAngles();
+                    file << elapsed << "," << dat.x << "," << dat.y << "," << dat.z << "," << dat2.heading << "," << dat2.roll << "," << dat2.pitch << "\n";
+                    file.flush();
+                }
+                else{
+                    a = 0;
+                    if (file.is_open()) file.close();
+                    Event ev{
+                        EventType::MotionCaptured,
+                        EvMotionCaptured{std::string("/home/pi/startup.csv")},
+                        0
+                    };
+                    q_.push(std::move(ev));
+
+                    //system("scp /home/pi/startup.csv pi@10.42.0.1:/home/pi/startup.csv");
+                    
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    if (file.is_open()) file.flush();
+    if (fd_ >= 0) close(fd_);
     return;
 }

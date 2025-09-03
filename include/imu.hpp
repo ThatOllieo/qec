@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "../include/tsqueue.hpp"
 #include "../include/events.hpp"
+#include <fstream>
 
 class IMU {
 public:
@@ -44,7 +45,7 @@ public:
     Vector3 getGravity();
     Vector3 getLinearAccel();
 
-
+    void triggerCapture(int milliseconds);
 
 private:
     void loop();
@@ -54,8 +55,13 @@ private:
     std::atomic<bool> running_{false};
 
     int fd_{-1};
+    std::ofstream file;
 
     bool writeByte(uint8_t reg, uint8_t value);
     bool readBytes(uint8_t reg, uint8_t* buffer, size_t length);
+
+
+    int a = 0;
+    int t = 10000;
 
 };
