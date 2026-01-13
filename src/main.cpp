@@ -9,7 +9,7 @@
 #include "../include/deployment_watcher.hpp"
 #include "../include/imu.hpp"
 #include "../include/comms_manager.hpp"
-#include "../include/channels/tcp_channel.hpp"
+#include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
 #include "utils.hpp"
 
@@ -144,7 +144,7 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams){
             comms.reply_ok_command(c.correlation_id);
             // Command request demo (cmd 0x0011, no args)
             uint16_t corr2 = comms.send_command_async(
-                /*dest*/0xA1,
+                /*dest*/0x01,
                 ChannelId::Wifi,
                 /*cmd*/0x0013,
                 /*args*/{},
@@ -233,11 +233,15 @@ int main() {
     CommsManager comms(eventList);
     comms.set_src(0xEF); // sets the identifier of this device
 
-    TcpConfig tcpcfg;
-    tcpcfg.host = "10.42.0.1";  
-    tcpcfg.port = 5000;
-    auto tcp = std::make_unique<TcpChannel>(tcpcfg);
-    comms.register_channel(std::move(tcp));
+    //TcpConfig tcpcfg;
+    //tcpcfg.host = "10.42.0.1";  
+    //tcpcfg.port = 5000;
+    //auto tcp = std::make_unique<TcpChannel>(tcpcfg);
+    //comms.register_channel(std::move(tcp));
+
+    UdpConfig udpcfg;
+    auto udp =  std::make_unique<UdpChannel>(udpcfg);
+    comms.register_channel(std::move(udp));
 
     RadioConfig rcfg;
     rcfg.freq_hz = 434'000'000;
@@ -259,28 +263,9 @@ int main() {
     {
         // Telemetry request demo (sensor 7)
         uint16_t corr = comms.request_telem_async(
-            /*dest*/0xA1,
+            /*dest*/0x01,
             ChannelId::Wifi,
             /*sensor*/7,
-            std::chrono::milliseconds(1000),
-            /*retries*/2
-        );
-        if (corr) {
-            std::cout << "[MAIN] Sent TelemetryRequest corr=" << corr << "\n";
-            telem_plans[corr] = [](const std::vector<uint8_t>& bytes) {
-                std::cout << "[MAIN] Got " << bytes.size() << " telemetry bytes: ";
-                for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
-                std::cout << std::dec << "\n";
-            };
-        }
-    }
-
-    {
-        // Telemetry request demo (sensor 7)
-        uint16_t corr = comms.request_telem_async(
-            /*dest*/0xA2,
-            ChannelId::Radio,
-            /*sensor*/3,
             std::chrono::milliseconds(1000),
             /*retries*/2
         );
@@ -326,10 +311,11 @@ int main() {
                 std::cout << "[MAIN] (seq " << e.seq << ") PhotoTaken: " << p.path << "\n";
 
                 setTimeout([&p, &comms]() {
+                    std::cout << "[MAIN] triggering scp send\n";
                     system("scp /home/pi/left.jpg /home/pi/right.jpg pi@10.42.0.1:/var/www/juk/media/");
                     // Command request demo (cmd 0x0011, no args)
                     uint16_t corr2 = comms.send_command_async(
-                        /*dest*/0xA1,
+                        /*dest*/0x01,
                         ChannelId::Wifi,
                         /*cmd*/0x0013,
                         /*args*/{},
@@ -350,7 +336,6 @@ int main() {
             case EventType::Command: {
                 auto& c = std::get<EvCommand>(e.data);
                 std::cout << "[MAIN] Cmd CorrId: " << c.correlation_id << std::endl;
-
                 handleCommand(c, comms, cams);
                 break;
 

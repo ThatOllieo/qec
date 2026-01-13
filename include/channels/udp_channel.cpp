@@ -34,7 +34,6 @@ void UdpChannel::stop(){
 
     tx_items_.push(TxItem{});
     if(tx_thread_.joinable()) tx_thread_.join();
-
     close_sock();
     if(rx_thread_.joinable()) rx_thread_.join();
 
