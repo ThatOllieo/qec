@@ -35,7 +35,7 @@ bool CommsManager::start() {
     if (running_) return true;
     running_ = true;
 
-    // If no channels registered yet, add Wifi by default
+    // If no channels registered yet
     if (chans_.empty()) {
         std::cout << "NO REG CHAN" << std::endl;
         return false;

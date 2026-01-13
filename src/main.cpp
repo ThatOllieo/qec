@@ -10,6 +10,7 @@
 #include "../include/imu.hpp"
 #include "../include/comms_manager.hpp"
 #include "../include/channels/tcp_channel.hpp"
+#include "../include/channels/radio_channel.hpp"
 #include "utils.hpp"
 
 #include <fstream>
@@ -238,6 +239,20 @@ int main() {
     auto tcp = std::make_unique<TcpChannel>(tcpcfg);
     comms.register_channel(std::move(tcp));
 
+    RadioConfig rcfg;
+    rcfg.freq_hz = 434'000'000;
+    rcfg.pa_high   = true;
+    rcfg.power_dbm = 17;
+    rcfg.rx_bw_khz = 100.0;
+    rcfg.bitrate   = 55'000.0;
+    rcfg.fdev_hz   = 50'000.0;
+    rcfg.pin_reset = 22;
+    rcfg.pin_dio0  = 25;
+    rcfg.spidev    = "/dev/spidev0.1";
+
+    auto radio = std::make_unique<RadioChannel>(rcfg);
+    comms.register_channel(std::move(radio));
+
     comms.start();
 
     // --- DEMO outbound requests: fire once on startup ---
@@ -247,6 +262,25 @@ int main() {
             /*dest*/0xA1,
             ChannelId::Wifi,
             /*sensor*/7,
+            std::chrono::milliseconds(1000),
+            /*retries*/2
+        );
+        if (corr) {
+            std::cout << "[MAIN] Sent TelemetryRequest corr=" << corr << "\n";
+            telem_plans[corr] = [](const std::vector<uint8_t>& bytes) {
+                std::cout << "[MAIN] Got " << bytes.size() << " telemetry bytes: ";
+                for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
+                std::cout << std::dec << "\n";
+            };
+        }
+    }
+
+    {
+        // Telemetry request demo (sensor 7)
+        uint16_t corr = comms.request_telem_async(
+            /*dest*/0xA2,
+            ChannelId::Radio,
+            /*sensor*/3,
             std::chrono::milliseconds(1000),
             /*retries*/2
         );
