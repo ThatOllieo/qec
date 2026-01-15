@@ -12,6 +12,7 @@
 #include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
 #include "utils.hpp"
+#include "../include/ws_link.hpp"
 
 #include <fstream>
 #include <string>
@@ -259,6 +260,9 @@ int main() {
 
     comms.start();
 
+    WSLink wslink(eventList);
+    wslink.start(9002);
+
     // --- DEMO outbound requests: fire once on startup ---
     {
         // Telemetry request demo (sensor 7)
@@ -390,5 +394,6 @@ int main() {
     cams.shutdown();
     imu.stop();
     comms.stop();
+    wslink.stop();
     return 0;
 }
