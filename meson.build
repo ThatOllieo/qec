@@ -1,20 +1,19 @@
-project('uk', 'cpp',
+project('ukgs', 'cpp',
   version: '0.1',
   default_options: ['warning_level=3', 'cpp_std=c++17'])
 
 main_src = files('src/main.cpp')
-depl_src = files('src/deployment_watcher.cpp')
-case_src = files('src/camera_service.cpp')
-imu_src = files('src/imu.cpp')
 comm_src = files('src/comms_manager.cpp')
-tcp_channel = files('include/channels/tcp_channel.cpp')
+udp_channel = files('include/channels/udp_channel.cpp')
+rad_channel = files('include/channels/radio_channel.cpp')
+ws_link = files('src/ws_link.cpp')
 
-libcamera_dep = dependency('libcamera', required: true)
-jpeg = dependency('libjpeg', required: true)
 gpiod_dep = dependency('libgpiod', required: true)
+boost_dep = dependency('boost', modules : ['system'], required: true)
+json_dep = dependency('nlohmann_json', required: true)
 
-executable('uk',
-  [main_src,depl_src,case_src,imu_src,comm_src,tcp_channel],
+executable('ukgs',
+  [main_src,comm_src,udp_channel,rad_channel,ws_link],
   include_directories: include_directories('src'),
-  dependencies: [libcamera_dep, jpeg, gpiod_dep]
+  dependencies: [gpiod_dep,boost_dep]
 )
