@@ -12,7 +12,6 @@
 #include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
 #include "utils.hpp"
-#include "../include/ws_link.hpp"
 
 #include <fstream>
 #include <string>
@@ -260,9 +259,6 @@ int main() {
 
     comms.start();
 
-    WSLink wslink(eventList);
-    wslink.start(9002);
-
     // --- DEMO outbound requests: fire once on startup ---
     {
         // Telemetry request demo (sensor 7)
@@ -304,7 +300,23 @@ int main() {
                 std::string path = m.path;
                 setTimeout([path,&comms](){
                     std::cout << "[MAIN] Got mocap event, for path " << path << std::endl;
-                    system((std::string("scp ") + path + " pi@10.42.0.1:/home/pi/startup.csv").c_str());
+                    system((std::string("scp ") + path + " pi@10.42.0.1:/var/www/juk/startup.csv").c_str());
+
+                    uint16_t corr2 = comms.send_command_async(
+                        /*dest*/0x01,
+                        ChannelId::Wifi,
+                        /*cmd*/0x0014,
+                        /*args*/{},
+                        std::chrono::milliseconds(1000),
+                        1
+                    );
+                    if (corr2) {
+                        std::cout << "[MAIN] Sent Command corr=" << corr2 << "\n";
+                        cmd_plans[corr2] = [](){
+                            std::cout << "[MAIN] Command acknowledged successfully!\n";
+                        };
+                    }
+
                 }, std::chrono::milliseconds(1));
                 break;
             }
@@ -394,6 +406,5 @@ int main() {
     cams.shutdown();
     imu.stop();
     comms.stop();
-    wslink.stop();
     return 0;
 }
