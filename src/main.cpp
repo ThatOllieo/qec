@@ -72,13 +72,6 @@ int main() {
                     
                     auto &a = std::get<EvTelemetryArrived>(e.data);
 
-                    json j = {
-                        {"type", "telemetry"},
-                        {"correlation_id", a.correlation_id},
-                        {"data", a.bytes}
-                    };
-                    wslink.broadcast(j.dump());
-
                     if (auto it = telem_plans.find(a.correlation_id); it != telem_plans.end()) {
                         it->second(a.bytes);
                         telem_plans.erase(it);
@@ -120,7 +113,14 @@ int main() {
                 case EventType::Command: {
                     auto &c = std::get<EvCommand>(e.data);
                     std::cout << "[GS] Inbound Command (cmd=0x" << std::hex << c.command_id
-                              << std::dec << ", corr=" << c.correlation_id << ") — ignoring in GS demo\n";
+                              << std::dec << ", corr=" << c.correlation_id << ") — ignoring but forwarding to UI in GS demo\n";
+
+                    json j = {
+                        {"type", "command"},
+                        {"command_id", c.command_id},
+                    };
+                    wslink.broadcast(j.dump());
+
                     break;
                 }
 
@@ -182,11 +182,19 @@ int main() {
             }
             std::cout << "[GS] Sent TLM corr=" << corr << " dest=0x" << std::hex << int(dest)
                       << " sensor=0x" << sensor << std::dec << "\n";
-            telem_plans[corr] = [corr,&wslink](const std::vector<uint8_t>& bytes){
+            telem_plans[corr] = [corr,&wslink,sensor](const std::vector<uint8_t>& bytes){
                 std::cout << "[GS] TelemetryArrived corr=" << corr
                           << " len=" << bytes.size() << " data=";
                 for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
                 std::cout << std::dec << "\n";
+
+                json j = {
+                    {"type", "telemetry"},
+                    {"sensor", sensor},
+                    {"data", bytes}
+                };
+                wslink.broadcast(j.dump());
+
             };
 
         } else if (cmd == "cmd") {
@@ -211,6 +219,7 @@ int main() {
             }
             std::cout << "[GS] Sent CMD corr=" << corr << " dest=0x" << std::hex << int(dest)
                       << " cmd=0x" << cmdid << std::dec << "\n";
+
             cmd_plans[corr] = [corr](){
                 std::cout << "[GS] CommandAcked corr=" << corr << "\n";
             };
