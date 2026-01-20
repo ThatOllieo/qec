@@ -64,6 +64,40 @@ int main() {
 
     std::atomic<bool> running{true};
 
+    constexpr uint16_t toPoll[] = {0x0003, 0x0001};
+    std::thread polling([&]{
+        while(running){
+
+            for (uint16_t x : toPoll) {
+                uint16_t corr = comms.request_telem_async(
+                    0xEF,
+                    ChannelId::Wifi,
+                    x, // sensor id
+                    std::chrono::milliseconds(1000), // timeout
+                    2                                 // retries
+                );
+                if (!corr) {
+                    std::cout << "[GS] failed to send poll telemetry request\n";
+                    continue;
+                }
+
+                telem_plans[corr] = [corr,&wslink,x](const std::vector<uint8_t>& bytes){
+                    for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
+                    std::cout << std::dec << "\n";
+
+                    json j = {
+                        {"type", "telemetry"},
+                        {"sensor", x},
+                        {"data", bytes}
+                    };
+                    wslink.broadcast(j.dump());
+
+                };
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        }
+    });
+
     std::thread ev_thread([&]{
         while (running) {
             Event e = eventList.pop(); 
@@ -233,6 +267,7 @@ int main() {
     comms.stop();
     wslink.stop();
     if (ev_thread.joinable()) ev_thread.join();
+    if(polling.joinable()) polling.join();
 
     return 0;
 }
