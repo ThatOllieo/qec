@@ -40,7 +40,7 @@ bool DeploymentWatcher::getState() {
 void DeploymentWatcher::loop() {
     // Open once when the thread starts
     const char *chipname = "gpiochip0";
-    unsigned int line_num = 27; // BCM 17 (Inspire live version has deployment switch connections on both 27 and 17, 27 is the side one)
+    unsigned int line_num = 17; // BCM 27 (Inspire live version has deployment switch connections on both 27 and 17, 27 is the side one)
 
     chip_ = gpiod_chip_open_by_name(chipname);
     if (!chip_) {

@@ -260,14 +260,15 @@ int main() {
     comms.start();
 
     // --- DEMO outbound requests: fire once on startup ---
+    /*
     {
         // Telemetry request demo (sensor 7)
         uint16_t corr = comms.request_telem_async(
-            /*dest*/0x01,
+            0x01,
             ChannelId::Wifi,
-            /*sensor*/7,
+            7,
             std::chrono::milliseconds(1000),
-            /*retries*/2
+            2
         );
         if (corr) {
             std::cout << "[MAIN] Sent TelemetryRequest corr=" << corr << "\n";
@@ -278,6 +279,7 @@ int main() {
             };
         }
     }
+    */
 
     uint64_t seq = 1; //counter, used for logging 
     for (;;) {
@@ -359,7 +361,7 @@ int main() {
             //on telemetry request, get telem for specifed sensor, reply
             case EventType::TelemetryRequest: {
                 auto& t = std::get<EvTelemetryRequest>(e.data);
-                std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << std::endl;
+                std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << " sensorid: " << t.sensor_id << std::endl;
                 auto bytes = gather_telem_bytes(t.sensor_id,deploy,imu);
                 comms.reply_telem(t.correlation_id, bytes); 
                 break;
