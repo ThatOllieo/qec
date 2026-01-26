@@ -9,15 +9,13 @@ imu_src = files('src/imu.cpp')
 comm_src = files('src/comms_manager.cpp')
 udp_channel = files('include/channels/udp_channel.cpp')
 rad_channel = files('include/channels/radio_channel.cpp')
-ws_link = files('src/ws_link.cpp')
 
 libcamera_dep = dependency('libcamera', required: true)
 jpeg = dependency('libjpeg', required: true)
 gpiod_dep = dependency('libgpiod', required: true)
-boost_dep = dependency('boost', modules : ['system'])
 
 executable('uk',
-  [main_src,depl_src,case_src,imu_src,comm_src,udp_channel,rad_channel,ws_link],
+  [main_src,depl_src,case_src,imu_src,comm_src,udp_channel,rad_channel],
   include_directories: include_directories('src'),
-  dependencies: [libcamera_dep, jpeg, gpiod_dep,boost_dep]
+  dependencies: [libcamera_dep, jpeg, gpiod_dep]
 )

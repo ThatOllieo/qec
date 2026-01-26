@@ -12,7 +12,6 @@
 #include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
 #include "utils.hpp"
-#include "../include/ws_link.hpp"
 
 #include <fstream>
 #include <string>
@@ -115,7 +114,7 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
 }
 
 //handler for incoming commands
-int handleCommand(auto& c, CommsManager& comms, CameraModule& cams){
+int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
     switch (c.command_id)
     {
     //OBC CONTROLS 0x0***
@@ -132,9 +131,10 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams){
         comms.reply_ok_command(c.correlation_id);
         system("sudo reboot");
 
-    //manual image capture trigger
+    //manual image and imu capture trigger
     case 0x11:
         cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
+        imu.triggerCapture(10000);
         comms.reply_ok_command(c.correlation_id); 
         break;
 
@@ -260,18 +260,16 @@ int main() {
 
     comms.start();
 
-    WSLink wslink(eventList);
-    wslink.start(9002);
-
     // --- DEMO outbound requests: fire once on startup ---
+    /*
     {
         // Telemetry request demo (sensor 7)
         uint16_t corr = comms.request_telem_async(
-            /*dest*/0x01,
+            0x01,
             ChannelId::Wifi,
-            /*sensor*/7,
+            7,
             std::chrono::milliseconds(1000),
-            /*retries*/2
+            2
         );
         if (corr) {
             std::cout << "[MAIN] Sent TelemetryRequest corr=" << corr << "\n";
@@ -282,6 +280,7 @@ int main() {
             };
         }
     }
+    */
 
     uint64_t seq = 1; //counter, used for logging 
     for (;;) {
@@ -304,7 +303,23 @@ int main() {
                 std::string path = m.path;
                 setTimeout([path,&comms](){
                     std::cout << "[MAIN] Got mocap event, for path " << path << std::endl;
-                    system((std::string("scp ") + path + " pi@10.42.0.1:/home/pi/startup.csv").c_str());
+                    system((std::string("scp ") + path + " pi@10.42.0.1:/var/www/juk/startup.csv").c_str());
+
+                    uint16_t corr2 = comms.send_command_async(
+                        /*dest*/0x01,
+                        ChannelId::Wifi,
+                        /*cmd*/0x0014,
+                        /*args*/{},
+                        std::chrono::milliseconds(1000),
+                        1
+                    );
+                    if (corr2) {
+                        std::cout << "[MAIN] Sent Command corr=" << corr2 << "\n";
+                        cmd_plans[corr2] = [](){
+                            std::cout << "[MAIN] Command acknowledged successfully!\n";
+                        };
+                    }
+
                 }, std::chrono::milliseconds(1));
                 break;
             }
@@ -340,14 +355,14 @@ int main() {
             case EventType::Command: {
                 auto& c = std::get<EvCommand>(e.data);
                 std::cout << "[MAIN] Cmd CorrId: " << c.correlation_id << std::endl;
-                handleCommand(c, comms, cams);
+                handleCommand(c, comms, cams, imu);
                 break;
 
             }
             //on telemetry request, get telem for specifed sensor, reply
             case EventType::TelemetryRequest: {
                 auto& t = std::get<EvTelemetryRequest>(e.data);
-                std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << std::endl;
+                std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << " sensorid: " << t.sensor_id << std::endl;
                 auto bytes = gather_telem_bytes(t.sensor_id,deploy,imu);
                 comms.reply_telem(t.correlation_id, bytes); 
                 break;
@@ -394,6 +409,5 @@ int main() {
     cams.shutdown();
     imu.stop();
     comms.stop();
-    wslink.stop();
     return 0;
 }
