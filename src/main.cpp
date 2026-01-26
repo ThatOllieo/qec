@@ -114,7 +114,7 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
 }
 
 //handler for incoming commands
-int handleCommand(auto& c, CommsManager& comms, CameraModule& cams){
+int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
     switch (c.command_id)
     {
     //OBC CONTROLS 0x0***
@@ -131,9 +131,10 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams){
         comms.reply_ok_command(c.correlation_id);
         system("sudo reboot");
 
-    //manual image capture trigger
+    //manual image and imu capture trigger
     case 0x11:
         cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
+        imu.triggerCapture(10000);
         comms.reply_ok_command(c.correlation_id); 
         break;
 
@@ -354,7 +355,7 @@ int main() {
             case EventType::Command: {
                 auto& c = std::get<EvCommand>(e.data);
                 std::cout << "[MAIN] Cmd CorrId: " << c.correlation_id << std::endl;
-                handleCommand(c, comms, cams);
+                handleCommand(c, comms, cams, imu);
                 break;
 
             }
