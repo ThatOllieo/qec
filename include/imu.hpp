@@ -74,7 +74,7 @@ private:
     bool readBytes(uint8_t reg, uint8_t* buffer, size_t length);
 
     // Ring buffer length (how much history we keep in RAM)
-    int buffer_ms_ = 10000; // 10 seconds
+    int buffer_ms_ = 5000; // 10 seconds
 
     // IMU sampling period (approx). 20 ms = 50 Hz.
     int sample_period_ms_ = 20;
