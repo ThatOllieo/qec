@@ -203,6 +203,11 @@ struct WSLink::Impl {
 
     void push_incoming_message(std::string msg) {
         std::cout << "[ws <- client] " << msg << "\n";
+
+        Event e;
+        e.type = EventType::WSMessageReceived;
+        e.data = EvWSMessageReceived{std::move(msg)};
+        q_.push(std::move(e));
     }
 };
 

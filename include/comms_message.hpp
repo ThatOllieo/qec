@@ -4,10 +4,10 @@
 #include "message_types.hpp"
 
 enum class ChannelId : uint8_t {
-    Radio = 0,
-    Wifi = 1,
-    Can = 2,
-    Auto = 255
+    Radio = 0, // 0x00
+    Wifi = 1, // 0x01
+    Can = 2, // 0x02
+    Auto = 255 // 0xFF
 };
 
 struct CommsMessage {

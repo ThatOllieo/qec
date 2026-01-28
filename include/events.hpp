@@ -17,6 +17,7 @@ enum class EventType {
     TelemetryFailed,
     CommandAcked,
     CommandFailed,
+    WSMessageReceived
 };
 
 //=========== PAYLOAD TYPES ===========
@@ -53,6 +54,10 @@ struct EvTelemetryFailed { uint16_t correlation_id; std::string reason; };
 struct EvCommandAcked { uint16_t correlation_id; };
 struct EvCommandFailed { uint16_t correlation_id; std::string reason; };
 
+struct EvWSMessageReceived {
+    std::string jsonText;
+};
+
 //======= WRAPPER =======
 using EventPayload = std::variant<
     EvPhotoTaken, 
@@ -63,7 +68,8 @@ using EventPayload = std::variant<
     EvTelemetryArrived,
     EvTelemetryFailed,
     EvCommandAcked,
-    EvCommandFailed
+    EvCommandFailed,
+    EvWSMessageReceived
 >;
 
 //========= EVENT STRUCTURE =======
