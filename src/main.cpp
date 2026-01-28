@@ -134,7 +134,7 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
     //manual image and imu capture trigger
     case 0x11:
         cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
-        imu.triggerCapture(10000);
+        imu.triggerCapture(5000);
         comms.reply_ok_command(c.correlation_id); 
         break;
 
@@ -208,13 +208,24 @@ int main() {
     //camera setup, note that the events list is passed by reference so that events can be added by the camera thread. e.g. ive taken a photo
     CameraModule cams(eventList);
 
+    
     CameraModuleConfig cfg;
     cfg.left_index = 0;
     cfg.right_index = 1;
     cfg.width = 3840;
     cfg.height = 2160;
-    cfg.warmup_frames = 8;
+    cfg.warmup_frames = 16;
     cfg.jpeg_quality = 85;
+    
+    /*
+    CameraModuleConfig cfg;
+    cfg.left_index = 0;
+    cfg.right_index = 1;
+    cfg.width = 1280;
+    cfg.height = 720;
+    cfg.warmup_frames = 16;
+    cfg.jpeg_quality = 50;
+    */
 
     if (!cams.startup(cfg)) {
         std::cerr << "Camera startup failed\n";
@@ -294,7 +305,7 @@ int main() {
                 std::cout << "[MAIN] DEPLOY" << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
-                imu.triggerCapture(10000);
+                imu.triggerCapture(5000);
                 break;
             }
             
