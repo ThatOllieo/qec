@@ -284,8 +284,19 @@ struct CameraModule::Impl {
 CameraModule::CameraModule(TSQueue<Event>& mainEventQueue) : d_(new Impl(mainEventQueue)) {}
 CameraModule::~CameraModule() { shutdown(); }
 
-bool CameraModule::startup(const CameraModuleConfig& cfg) {
-    return d_->start_both(cfg);
+void CameraModule::startup(const CameraModuleConfig& cfg) {
+    state_ = ModuleState::Starting
+    if(d_->start_both(cfg)){
+        state_ = ModuleState::Running;
+    }
+    else{
+        throw CamsError(
+            ErrorCode::StartupFailed,
+            ErrorSeverity::Recoverable,
+            "CameraModule failed to start.",
+            "CameraModule::startup"
+        )
+    }
 }
 
 void CameraModule::take_left(const std::string& path, uint32_t seq)  { d_->left.take(path,  seq); }
@@ -293,11 +304,24 @@ void CameraModule::take_right(const std::string& path, uint32_t seq) { d_->right
 
 void CameraModule::take_both(const std::string& left_path, const std::string& right_path, uint32_t seq) {
     // Software near-simultaneous: post left then right quickly.
-    d_->left.take (left_path,  seq);
-    d_->right.take(right_path, seq);
+    if(state_ == ModuleState::Running){
+        d_->left.take (left_path,  seq);
+        d_->right.take(right_path, seq);
+    }
+    else{
+        throw CamsError(
+            ErrorCode::StateError,
+            ErrorSeverity::Warning,
+            "Attempted to take photos before cameras had started.",
+            "CameraModule::take_both"
+        )
+        
+    }
 }
 
 void CameraModule::shutdown() {
     if (!d_) return;
-    d_->stop_both();
+    if(d_->stop_both()){
+        state_ = ModuleState::Stopped;
+    }
 }
