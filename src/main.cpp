@@ -114,7 +114,7 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
 }
 
 //handler for incoming commands
-int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
+int handleCommand(const EvCommand& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
     switch (c.command_id)
     {
     //OBC CONTROLS 0x0***
@@ -126,10 +126,12 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
     case 0x01:
         comms.reply_ok_command(c.correlation_id); 
         system("sudo poweroff");
+        break;
     //reboot
     case 0x02:
         comms.reply_ok_command(c.correlation_id);
         system("sudo reboot");
+        break;
 
     //manual image and imu capture trigger
     case 0x11:
@@ -159,6 +161,7 @@ int handleCommand(auto& c, CommsManager& comms, CameraModule& cams, IMU& imu) {
                 };
             }
         }, std::chrono::milliseconds(1));
+        break;
 
     //COMMS MANAGER CONTROLS 0x1***
     //restart WiFi channel
@@ -303,7 +306,6 @@ int main() {
             case EventType::DeploymentTriggered: {
                 const auto& d = std::get<EvDeploymentTriggered>(e.data);
                 std::cout << "[MAIN] DEPLOY" << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
                 imu.triggerCapture(5000);
                 break;
