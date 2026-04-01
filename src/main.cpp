@@ -14,6 +14,7 @@
 #include "utils.hpp"
 
 #include "../include/exceptions.hpp"
+#include "../include/module_states.hpp"
 
 #include <fstream>
 #include <string>
@@ -398,11 +399,13 @@ int run() {
                     const auto& d = std::get<EvDeploymentTriggered>(e.data);
                     std::cout << "[MAIN] DEPLOY" << std::endl;
 
-                    try{
-                        cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
-                    }
-                    catch(CamsError& ex){
-                        std::cerr << "[WARN] " << ex.what() << '\n';
+                    if(cams.state() == ModuleState::Running){
+                        try{
+                            cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
+                        }
+                        catch(CamsError& ex){
+                            std::cerr << "[WARN] " << ex.what() << '\n';
+                        }
                     }
                     
                     imu.triggerCapture(5000);

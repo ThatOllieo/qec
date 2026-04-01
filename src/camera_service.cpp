@@ -295,7 +295,7 @@ void CameraModule::startup(const CameraModuleConfig& cfg) {
             ErrorSeverity::Recoverable,
             "CameraModule failed to start.",
             "CameraModule::startup"
-        )
+        );
     }
 }
 
@@ -314,7 +314,7 @@ void CameraModule::take_both(const std::string& left_path, const std::string& ri
             ErrorSeverity::Warning,
             "Attempted to take photos before cameras had started.",
             "CameraModule::take_both"
-        )
+        );
         
     }
 }

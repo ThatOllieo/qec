@@ -45,6 +45,7 @@ IMU::~IMU(){
 }
 
 void IMU::start() {
+    state_ = ModuleState::Starting;
     if (running_) return;
     running_ = true;
     th_ = std::thread([this]{ loop(); });
@@ -59,6 +60,7 @@ void IMU::stop() {
         fd_ = -1;
     }
     if (file.is_open()) file.close();
+    state_ = ModuleState::Stopped;
     // Clean up GPIO resources
 }
 
@@ -207,26 +209,37 @@ void IMU::loop(){
     // Open I2C device file
     fd_ = open(I2C_BUS, O_RDWR);
     if (fd_ < 0) {
-        perror("Failed to open I2C bus");
-        return;
+        throw IMUError(
+            ErrorCode::ProtocolError,
+            ErrorSeverity::Recoverable,
+            "Failed to open I2C bus",
+            "IMU:loop"
+        );
     }
 
     // Set the I2C address for the BNO055
     if (ioctl(fd_, I2C_SLAVE, BNO055_ADDR) < 0) {
-        perror("Failed to connect to BNO055");
-        close(fd_);
-        return;
+        throw IMUError(
+            ErrorCode::DeviceUnreachable,
+            ErrorSeverity::Recoverable,
+            "Failed to connect to BNO055",
+            "IMU::loop"
+        );
     }
 
     // Set the BNO055 to NDOF (fusion) mode
     if (!writeByte(REG_OPR_MODE, OPERATION_MODE_NDOF)) {
-        std::cerr << "Failed to set fusion mode\n";
-        close(fd_);
-        return;
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to set fusion mode",
+            "IMU::loop"
+        );
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Wait 20 ms after mode change
 
+    state_ = ModuleState::Running;
     while(running_){
         auto start_time = std::chrono::steady_clock::now();
 

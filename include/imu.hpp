@@ -10,6 +10,9 @@
 #include <chrono>
 #include <string>
 
+#include "../include/module_states.hpp"
+#include "../include/exceptions.hpp"
+
 class IMU {
 public:
     explicit IMU(TSQueue<Event>& mainQueue);
@@ -60,7 +63,10 @@ public:
 
     void triggerCapture(int milliseconds);
 
+    ModuleState state() {return state_};
+
 private:
+    ModuleState state_ = ModuleState::Stopped;
     void loop();
 
     TSQueue<Event>& q_;

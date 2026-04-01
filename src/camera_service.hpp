@@ -42,7 +42,7 @@ public:
     ModuleState state() {return state_};
 
 private:
-    ModuleState state_;
+    ModuleState state_ = ModuleState::Stopped;
     struct Impl;
     Impl* d_;  // pImpl to keep libcamera out of main
 };
