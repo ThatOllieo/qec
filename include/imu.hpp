@@ -67,6 +67,7 @@ public:
 
 private:
     ModuleState state_ = ModuleState::Stopped;
+    bool startupTasks();
     void loop();
 
     TSQueue<Event>& q_;

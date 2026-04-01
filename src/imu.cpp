@@ -47,6 +47,16 @@ IMU::~IMU(){
 void IMU::start() {
     state_ = ModuleState::Starting;
     if (running_) return;
+    
+    try{
+        startupTasks();
+    }
+    catch(const IMUError& ex){
+        state_ = ModuleState::Failed;
+        throw;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
     running_ = true;
     th_ = std::thread([this]{ loop(); });
 }
@@ -67,9 +77,23 @@ void IMU::stop() {
 
 //reads calibration status for each sensor
 IMU::CalibrationStatus IMU::getCalibrationStatus() {
+    if(running_ == false){
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read calibration status while IMU is not running",
+            "IMU::getCalibrationStatus"
+        );
+    }
+
     uint8_t cal;
     if (!readBytes(REG_CALIB_STAT, &cal, 1)) {
-        return {0, 0, 0, 0};
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to read calibration status",
+            "IMU::getCalibrationStatus"
+        );
     }
 
     // Uncomment for debugging:
@@ -85,9 +109,24 @@ IMU::CalibrationStatus IMU::getCalibrationStatus() {
 
 //reads euler angles
 IMU::EulerAngles IMU::getEulerAngles() {
+    if(running_ == false){
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read Euler angles while IMU is not running",
+            "IMU::getEulerAngles"
+        );
+    }
     uint8_t buffer[6];
-    if (!readBytes(REG_EULER_H_LSB, buffer, 6))
-        return {0, 0, 0};
+    if (!readBytes(REG_EULER_H_LSB, buffer, 6)){
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to read Euler angles",
+            "IMU::getEulerAngles"
+        );
+    }
+    
 
     int16_t h = (buffer[1] << 8) | buffer[0];
     int16_t r = (buffer[3] << 8) | buffer[2];
@@ -98,9 +137,23 @@ IMU::EulerAngles IMU::getEulerAngles() {
 
 //quaternions
 IMU::Quaternion IMU::getQuaternion() {
+    if(running_ == false){
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read quaternion while IMU is not running",
+            "IMU::getQuaternion"
+        );
+    }
     uint8_t buffer[8];
-    if (!readBytes(REG_QUATERNION_LSB, buffer, 8))
-        return {0, 0, 0, 0};
+    if (!readBytes(REG_QUATERNION_LSB, buffer, 8)){
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to read quaternion",
+            "IMU::getQuaternion"
+        );
+    }
 
     int16_t w = (buffer[1] << 8) | buffer[0];
     int16_t x = (buffer[3] << 8) | buffer[2];
@@ -112,9 +165,23 @@ IMU::Quaternion IMU::getQuaternion() {
 
 //yeah, gravity vector
 IMU::Vector3 IMU::getGravity() {
+    if(running_ == false){
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read gravity vector while IMU is not running",
+            "IMU::getGravity"
+        );
+    }
     uint8_t buffer[6];
-    if (!readBytes(REG_GRAVITY_LSB, buffer, 6))
-        return {0, 0, 0};
+    if (!readBytes(REG_GRAVITY_LSB, buffer, 6)){
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to read gravity vector",
+            "IMU::getGravity"
+        );
+    }
 
     int16_t x = (buffer[1] << 8) | buffer[0];
     int16_t y = (buffer[3] << 8) | buffer[2];
@@ -125,9 +192,23 @@ IMU::Vector3 IMU::getGravity() {
 
 //really doesnt need commenting after youve seen all the others
 IMU::Vector3 IMU::getLinearAccel() {
+    if(running_ == false){
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read linear acceleration while IMU is not running",
+            "IMU::getLinearAccel"
+        );
+    }
     uint8_t buffer[6];
-    if (!readBytes(REG_LIN_ACCEL_LSB, buffer, 6))
-        return {0, 0, 0};
+    if (!readBytes(REG_LIN_ACCEL_LSB, buffer, 6)){
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to read linear acceleration",
+            "IMU::getLinearAccel"
+        );
+    }
 
     int16_t x = (buffer[1] << 8) | buffer[0];
     int16_t y = (buffer[3] << 8) | buffer[2];
@@ -205,7 +286,7 @@ void IMU::dumpCaptureToCsvLocked(const std::string& path,
     out.close();
 }
 
-void IMU::loop(){
+bool IMU::startupTasks(){
     // Open I2C device file
     fd_ = open(I2C_BUS, O_RDWR);
     if (fd_ < 0) {
@@ -236,9 +317,10 @@ void IMU::loop(){
             "IMU::loop"
         );
     }
+    return true;
+}
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Wait 20 ms after mode change
-
+void IMU::loop(){
     state_ = ModuleState::Running;
     while(running_){
         auto start_time = std::chrono::steady_clock::now();
