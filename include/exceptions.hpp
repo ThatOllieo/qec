@@ -87,7 +87,7 @@ private:
     std::string cause_;
 };
 
-class CommsError : public QecException{ public: using QecException:QecException; };
-class CamsError : public QecException{ public: using QecException:QecException; };
-class DeployWatchError : public QecException{ public: using QecException:QecException; };
-class IMUError : public QecException{ public: using QecException:QecException; };
+class CommsError : public QecException{ public: using QecException::QecException; };
+class CamsError : public QecException{ public: using QecException::QecException; };
+class DeployWatchError : public QecException{ public: using QecException::QecException; };
+class IMUError : public QecException{ public: using QecException::QecException; };

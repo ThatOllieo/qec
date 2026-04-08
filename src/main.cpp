@@ -298,7 +298,7 @@ int run() {
     }
 
     //Deployment switch, configured so that on release of the switch, an event is pushed to the main list
-    DeploymentWatcher deploy(eventList)
+    DeploymentWatcher deploy(eventList);
     try{
         deploy.start();
     }

@@ -275,9 +275,10 @@ struct CameraModule::Impl {
         right_ok = right.init(outQ, cfg.right_index, cfg.width, cfg.height, cfg.warmup_frames, cfg.jpeg_quality);
         return left_ok && right_ok;
     }
-    void stop_both() {
+    bool stop_both() {
         right.stop();
         left .stop();
+        return true;
     }
 };
 
@@ -285,7 +286,7 @@ CameraModule::CameraModule(TSQueue<Event>& mainEventQueue) : d_(new Impl(mainEve
 CameraModule::~CameraModule() { shutdown(); }
 
 void CameraModule::startup(const CameraModuleConfig& cfg) {
-    state_ = ModuleState::Starting
+    state_ = ModuleState::Starting;
     if(d_->start_both(cfg)){
         state_ = ModuleState::Running;
     }
