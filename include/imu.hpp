@@ -63,7 +63,7 @@ public:
 
     void triggerCapture(int milliseconds);
 
-    ModuleState state() {return state_};
+    ModuleState state() {return state_;};
 
 private:
     ModuleState state_ = ModuleState::Stopped;

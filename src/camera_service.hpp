@@ -39,7 +39,7 @@ public:
     CameraModule(const CameraModule&) = delete;
     CameraModule& operator=(const CameraModule&) = delete;
 
-    ModuleState state() {return state_};
+    ModuleState state() {return state_;};
 
 private:
     ModuleState state_ = ModuleState::Stopped;
