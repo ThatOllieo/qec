@@ -16,9 +16,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-// gpiod
-#include <gpiod.h>
-
 // ---- RFM69 registers & constants (subset) ----
 static constexpr uint8_t REG_FIFO           = 0x00;
 static constexpr uint8_t REG_OPMODE         = 0x01;
@@ -272,37 +269,130 @@ bool RadioChannel::hw_open() {
     if (ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0) { perror("SPI_IOC_WR_BITS_PER_WORD"); return false; }
     if (ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &cfg_.spi_speed_hz) < 0) { perror("SPI_IOC_WR_MAX_SPEED_HZ"); return false; }
 
-    // Open GPIO
-    gpiod_chip* chip = gpiod_chip_open_by_name("gpiochip0");
-    if (!chip) { perror("gpiod_chip_open_by_name"); return false; }
+    // Open GPIO (libgpiod v2)
+    gpiod_chip* chip = gpiod_chip_open("/dev/gpiochip0");
+    if (!chip) { perror("gpiod_chip_open"); return false; }
 
-    gpiod_line* reset = gpiod_chip_get_line(chip, cfg_.pin_reset);
-    gpiod_line* dio0  = gpiod_chip_get_line(chip, cfg_.pin_dio0);
-    if (!reset || !dio0) {
-        std::cerr << "gpiod_chip_get_line failed\n";
+    unsigned int reset_offset = static_cast<unsigned int>(cfg_.pin_reset);
+    unsigned int dio0_offset  = static_cast<unsigned int>(cfg_.pin_dio0);
+
+    gpiod_line_settings* reset_settings = gpiod_line_settings_new();
+    gpiod_line_settings* dio0_settings  = gpiod_line_settings_new();
+    gpiod_line_config* reset_line_config = gpiod_line_config_new();
+    gpiod_line_config* dio0_line_config  = gpiod_line_config_new();
+    gpiod_request_config* reset_request_config = gpiod_request_config_new();
+    gpiod_request_config* dio0_request_config  = gpiod_request_config_new();
+
+    if (!reset_settings || !dio0_settings || !reset_line_config || !dio0_line_config ||
+        !reset_request_config || !dio0_request_config) {
+        std::cerr << "libgpiod v2 config allocation failed\n";
+        if (reset_request_config) gpiod_request_config_free(reset_request_config);
+        if (dio0_request_config)  gpiod_request_config_free(dio0_request_config);
+        if (reset_line_config)    gpiod_line_config_free(reset_line_config);
+        if (dio0_line_config)     gpiod_line_config_free(dio0_line_config);
+        if (reset_settings)       gpiod_line_settings_free(reset_settings);
+        if (dio0_settings)        gpiod_line_settings_free(dio0_settings);
         gpiod_chip_close(chip);
         return false;
     }
-    if (gpiod_line_request_output(reset, "rfm69-reset", 0) < 0) {
-        perror("gpiod_line_request_output(reset)");
+
+    if (gpiod_line_settings_set_direction(reset_settings, GPIOD_LINE_DIRECTION_OUTPUT) < 0) {
+        perror("gpiod_line_settings_set_direction(reset)");
+        gpiod_request_config_free(reset_request_config);
+        gpiod_request_config_free(dio0_request_config);
+        gpiod_line_config_free(reset_line_config);
+        gpiod_line_config_free(dio0_line_config);
+        gpiod_line_settings_free(reset_settings);
+        gpiod_line_settings_free(dio0_settings);
         gpiod_chip_close(chip);
         return false;
     }
-    if (gpiod_line_request_input(dio0, "rfm69-dio0") < 0) {
-        perror("gpiod_line_request_input(dio0)");
-        gpiod_line_release(reset);
+
+    if (gpiod_line_settings_set_output_value(reset_settings, GPIOD_LINE_VALUE_INACTIVE) < 0) {
+        perror("gpiod_line_settings_set_output_value(reset)");
+        gpiod_request_config_free(reset_request_config);
+        gpiod_request_config_free(dio0_request_config);
+        gpiod_line_config_free(reset_line_config);
+        gpiod_line_config_free(dio0_line_config);
+        gpiod_line_settings_free(reset_settings);
+        gpiod_line_settings_free(dio0_settings);
+        gpiod_chip_close(chip);
+        return false;
+    }
+
+    if (gpiod_line_settings_set_direction(dio0_settings, GPIOD_LINE_DIRECTION_INPUT) < 0) {
+        perror("gpiod_line_settings_set_direction(dio0)");
+        gpiod_request_config_free(reset_request_config);
+        gpiod_request_config_free(dio0_request_config);
+        gpiod_line_config_free(reset_line_config);
+        gpiod_line_config_free(dio0_line_config);
+        gpiod_line_settings_free(reset_settings);
+        gpiod_line_settings_free(dio0_settings);
+        gpiod_chip_close(chip);
+        return false;
+    }
+
+    if (gpiod_line_config_add_line_settings(reset_line_config, &reset_offset, 1, reset_settings) < 0) {
+        perror("gpiod_line_config_add_line_settings(reset)");
+        gpiod_request_config_free(reset_request_config);
+        gpiod_request_config_free(dio0_request_config);
+        gpiod_line_config_free(reset_line_config);
+        gpiod_line_config_free(dio0_line_config);
+        gpiod_line_settings_free(reset_settings);
+        gpiod_line_settings_free(dio0_settings);
+        gpiod_chip_close(chip);
+        return false;
+    }
+
+    if (gpiod_line_config_add_line_settings(dio0_line_config, &dio0_offset, 1, dio0_settings) < 0) {
+        perror("gpiod_line_config_add_line_settings(dio0)");
+        gpiod_request_config_free(reset_request_config);
+        gpiod_request_config_free(dio0_request_config);
+        gpiod_line_config_free(reset_line_config);
+        gpiod_line_config_free(dio0_line_config);
+        gpiod_line_settings_free(reset_settings);
+        gpiod_line_settings_free(dio0_settings);
+        gpiod_chip_close(chip);
+        return false;
+    }
+
+    gpiod_request_config_set_consumer(reset_request_config, "rfm69-reset");
+    gpiod_request_config_set_consumer(dio0_request_config, "rfm69-dio0");
+
+    gpiod_line_request* reset_request = gpiod_chip_request_lines(chip, reset_request_config, reset_line_config);
+    gpiod_line_request* dio0_request  = gpiod_chip_request_lines(chip, dio0_request_config, dio0_line_config);
+
+    gpiod_request_config_free(reset_request_config);
+    gpiod_request_config_free(dio0_request_config);
+    gpiod_line_config_free(reset_line_config);
+    gpiod_line_config_free(dio0_line_config);
+    gpiod_line_settings_free(reset_settings);
+    gpiod_line_settings_free(dio0_settings);
+
+    if (!reset_request || !dio0_request) {
+        perror("gpiod_chip_request_lines");
+        if (reset_request) gpiod_line_request_release(reset_request);
+        if (dio0_request)  gpiod_line_request_release(dio0_request);
         gpiod_chip_close(chip);
         return false;
     }
 
     gpio_chip_  = chip;
-    gpio_reset_ = reset;
-    gpio_dio0_  = dio0;
+    gpio_reset_ = reset_request;
+    gpio_dio0_  = dio0_request;
 
     // Reset pulse
-    gpiod_line_set_value((gpiod_line*)gpio_reset_, 1);
+    if (gpiod_line_request_set_value(gpio_reset_, reset_offset, GPIOD_LINE_VALUE_ACTIVE) < 0) {
+        perror("gpiod_line_request_set_value(reset high)");
+        hw_close();
+        return false;
+    }
     sleep_ms(10);
-    gpiod_line_set_value((gpiod_line*)gpio_reset_, 0);
+    if (gpiod_line_request_set_value(gpio_reset_, reset_offset, GPIOD_LINE_VALUE_INACTIVE) < 0) {
+        perror("gpiod_line_request_set_value(reset low)");
+        hw_close();
+        return false;
+    }
     sleep_ms(10);
     return true;
 }
@@ -311,9 +401,9 @@ void RadioChannel::hw_close() {
     // stdby best effort
     try { hw_set_mode(MODE_STDBY); } catch (...) {}
 
-    if (gpio_reset_) { gpiod_line_release((gpiod_line*)gpio_reset_); gpio_reset_ = nullptr; }
-    if (gpio_dio0_)  { gpiod_line_release((gpiod_line*)gpio_dio0_);  gpio_dio0_  = nullptr; }
-    if (gpio_chip_)  { gpiod_chip_close((gpiod_chip*)gpio_chip_);    gpio_chip_  = nullptr; }
+    if (gpio_reset_) { gpiod_line_request_release(gpio_reset_); gpio_reset_ = nullptr; }
+    if (gpio_dio0_)  { gpiod_line_request_release(gpio_dio0_);  gpio_dio0_  = nullptr; }
+    if (gpio_chip_)  { gpiod_chip_close(gpio_chip_);            gpio_chip_  = nullptr; }
 
     if (spi_fd_ >= 0) { ::close(spi_fd_); spi_fd_ = -1; }
 }
@@ -475,7 +565,10 @@ bool RadioChannel::hw_rx_once(std::vector<uint8_t>& out, double timeout_s) {
     while (true) {
         uint8_t irq2 = r_read(spi_fd_, cfg_.spi_speed_hz, REG_IRQFLAGS2);
         // PayloadReady condition or DIO0 high -> packet present
-        if ((irq2 & 0x04) || gpiod_line_get_value((gpiod_line*)gpio_dio0_) == 1) {
+        int dio0_value = gpiod_line_request_get_value(
+            gpio_dio0_, static_cast<unsigned int>(cfg_.pin_dio0));
+
+        if ((irq2 & 0x04) || dio0_value == GPIOD_LINE_VALUE_ACTIVE) {
             // Check CRC ok (bit1)
             if ((irq2 & 0x02) == 0) {
                 // bad CRC → drain one packet: length then bytes
