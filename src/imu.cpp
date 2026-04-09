@@ -4,6 +4,7 @@
 #include <fstream>
 #include <chrono>
 #include <thread>
+#include <stdexcept>
 
 #include <fcntl.h>      // for open()
 #include <unistd.h>     // for close(), read(), write(), usleep()
@@ -30,13 +31,17 @@
 #define REG_CALIB_STAT 0x35
 
 bool IMU::writeByte(uint8_t reg, uint8_t value) {
+    std::lock_guard<std::mutex> lk(device_mtx_);
+    if (fd_ < 0) return false;
     uint8_t buf[2] = {reg, value};
     return write(fd_, buf, 2) == 2;
 }
 
 bool IMU::readBytes(uint8_t reg, uint8_t* buffer, size_t length) {
-    if (write(fd_, &reg, 1) != 1) return false;  // set register pointer
-    return read(fd_, buffer, length) == (ssize_t)length;  // read data
+    std::lock_guard<std::mutex> lk(device_mtx_);
+    if (fd_ < 0) return false;
+    if (write(fd_, &reg, 1) != 1) return false;
+    return read(fd_, buffer, length) == static_cast<ssize_t>(length);
 }
 
 IMU::IMU(TSQueue<Event>& mainQueue) : q_(mainQueue){}
@@ -44,60 +49,151 @@ IMU::~IMU(){
     stop();
 }
 
-void IMU::start() {
-    state_ = ModuleState::Starting;
-    if (running_) return;
-    
-    try{
-        startupTasks();
-    }
-    catch(const IMUError& ex){
-        state_ = ModuleState::Failed;
-        throw;
+void IMU::cleanupHardware() noexcept {
+    {
+        std::lock_guard<std::mutex> lk(device_mtx_);
+        if (fd_ >= 0) {
+            close(fd_);
+            fd_ = -1;
+        }
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    running_ = true;
-    th_ = std::thread([this]{ loop(); });
-}
-
-void IMU::stop() {
-    if (!running_) return;
-    running_ = false;
-    if (th_.joinable()) th_.join();
-    if (fd_ >= 0) {
-        close(fd_);
-        fd_ = -1;
-    }
     if (file.is_open()) file.close();
-    state_ = ModuleState::Stopped;
-    // Clean up GPIO resources
 }
 
+void IMU::setFailedState(const std::string& message) {
+    {
+        std::lock_guard<std::mutex> lk(error_mtx_);
+        last_error_ = message;
+    }
+    state_ = ModuleState::Failed;
+    running_ = false;
+}
 
-//reads calibration status for each sensor
-IMU::CalibrationStatus IMU::getCalibrationStatus() {
-    if(running_ == false){
+std::string IMU::getLastError() const {
+    std::lock_guard<std::mutex> lk(error_mtx_);
+    return last_error_;
+}
+
+void IMU::ensureSampleAvailable(const char* caller) const {
+    const auto state = state_.load();
+    if (state == ModuleState::Failed) {
         throw IMUError(
             ErrorCode::StateError,
             ErrorSeverity::Recoverable,
-            "Attempted to read calibration status while IMU is not running",
-            "IMU::getCalibrationStatus"
+            "Attempted to read cached IMU data while module is failed",
+            caller,
+            {},
+            getLastError()
         );
     }
 
-    uint8_t cal;
+    if (!latest_sample_valid_) {
+        throw IMUError(
+            ErrorCode::StateError,
+            ErrorSeverity::Recoverable,
+            "Attempted to read IMU data before a valid sample was available",
+            caller
+        );
+    }
+}
+
+void IMU::start() {
+    if (running_) return;
+
+    state_ = ModuleState::Starting;
+    {
+        std::lock_guard<std::mutex> lk(error_mtx_);
+        last_error_.clear();
+    }
+
+    try {
+        startupTasks();
+
+        running_ = true;
+        th_ = std::thread([this] {
+            try {
+                loop();
+            } catch (const IMUError& ex) {
+                std::cerr << "[IMU] Worker thread failed: " << ex.what() << "\n";
+                setFailedState(ex.what());
+                cleanupHardware();
+            } catch (const std::exception& ex) {
+                std::cerr << "[IMU] Worker thread failed with std::exception: " << ex.what() << "\n";
+                setFailedState(ex.what());
+                cleanupHardware();
+            } catch (...) {
+                std::cerr << "[IMU] Worker thread failed with unknown exception\n";
+                setFailedState("Unknown IMU worker failure");
+                cleanupHardware();
+            }
+        });
+    } catch (...) {
+        running_ = false;
+        cleanupHardware();
+        state_ = ModuleState::Failed;
+        throw;
+    }
+}
+
+void IMU::stop() {
+    running_ = false;
+
+    if (th_.joinable()) {
+        if (th_.get_id() == std::this_thread::get_id()) {
+            th_.detach();
+        } else {
+            th_.join();
+        }
+    }
+
+    cleanupHardware();
+
+    if (state_.load() != ModuleState::Failed) {
+        state_ = ModuleState::Stopped;
+    }
+}
+
+IMU::CalibrationStatus IMU::getCalibrationStatus() {
+    std::lock_guard<std::mutex> lk(latest_sample_mtx_);
+    ensureSampleAvailable("IMU::getCalibrationStatus");
+    return latest_sample_.cal;
+}
+
+IMU::EulerAngles IMU::getEulerAngles() {
+    std::lock_guard<std::mutex> lk(latest_sample_mtx_);
+    ensureSampleAvailable("IMU::getEulerAngles");
+    return latest_sample_.eul;
+}
+
+IMU::Quaternion IMU::getQuaternion() {
+    std::lock_guard<std::mutex> lk(latest_sample_mtx_);
+    ensureSampleAvailable("IMU::getQuaternion");
+    return latest_sample_.quat;
+}
+
+IMU::Vector3 IMU::getGravity() {
+    std::lock_guard<std::mutex> lk(latest_sample_mtx_);
+    ensureSampleAvailable("IMU::getGravity");
+    return latest_sample_.grav;
+}
+
+IMU::Vector3 IMU::getLinearAccel() {
+    std::lock_guard<std::mutex> lk(latest_sample_mtx_);
+    ensureSampleAvailable("IMU::getLinearAccel");
+    return latest_sample_.linAcc;
+}
+
+IMU::CalibrationStatus IMU::readCalibrationStatusHw() {
+    uint8_t cal = 0;
     if (!readBytes(REG_CALIB_STAT, &cal, 1)) {
         throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
             "Failed to read calibration status",
-            "IMU::getCalibrationStatus"
+            "IMU::readCalibrationStatusHw"
         );
     }
-
-    // Uncomment for debugging:
-    // std::cout << "Raw cal byte = 0x" << std::hex << (int)cal << std::dec << std::endl;
 
     return {
         static_cast<uint8_t>((cal >> 6) & 0x03),
@@ -107,112 +203,75 @@ IMU::CalibrationStatus IMU::getCalibrationStatus() {
     };
 }
 
-//reads euler angles
-IMU::EulerAngles IMU::getEulerAngles() {
-    if(running_ == false){
-        throw IMUError(
-            ErrorCode::StateError,
-            ErrorSeverity::Recoverable,
-            "Attempted to read Euler angles while IMU is not running",
-            "IMU::getEulerAngles"
-        );
-    }
-    uint8_t buffer[6];
-    if (!readBytes(REG_EULER_H_LSB, buffer, 6)){
+IMU::EulerAngles IMU::readEulerAnglesHw() {
+    uint8_t buffer[6]{};
+    if (!readBytes(REG_EULER_H_LSB, buffer, 6)) {
         throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
             "Failed to read Euler angles",
-            "IMU::getEulerAngles"
+            "IMU::readEulerAnglesHw"
         );
     }
-    
 
-    int16_t h = (buffer[1] << 8) | buffer[0];
-    int16_t r = (buffer[3] << 8) | buffer[2];
-    int16_t p = (buffer[5] << 8) | buffer[4];
+    int16_t h = static_cast<int16_t>((buffer[1] << 8) | buffer[0]);
+    int16_t r = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
+    int16_t p = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
 
     return { h / 16.0, r / 16.0, p / 16.0 };
 }
 
-//quaternions
-IMU::Quaternion IMU::getQuaternion() {
-    if(running_ == false){
-        throw IMUError(
-            ErrorCode::StateError,
-            ErrorSeverity::Recoverable,
-            "Attempted to read quaternion while IMU is not running",
-            "IMU::getQuaternion"
-        );
-    }
-    uint8_t buffer[8];
-    if (!readBytes(REG_QUATERNION_LSB, buffer, 8)){
+IMU::Quaternion IMU::readQuaternionHw() {
+    uint8_t buffer[8]{};
+    if (!readBytes(REG_QUATERNION_LSB, buffer, 8)) {
         throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
             "Failed to read quaternion",
-            "IMU::getQuaternion"
+            "IMU::readQuaternionHw"
         );
     }
 
-    int16_t w = (buffer[1] << 8) | buffer[0];
-    int16_t x = (buffer[3] << 8) | buffer[2];
-    int16_t y = (buffer[5] << 8) | buffer[4];
-    int16_t z = (buffer[7] << 8) | buffer[6];
+    int16_t w = static_cast<int16_t>((buffer[1] << 8) | buffer[0]);
+    int16_t x = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
+    int16_t y = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
+    int16_t z = static_cast<int16_t>((buffer[7] << 8) | buffer[6]);
 
     return { w / 16384.0, x / 16384.0, y / 16384.0, z / 16384.0 };
 }
 
-//yeah, gravity vector
-IMU::Vector3 IMU::getGravity() {
-    if(running_ == false){
-        throw IMUError(
-            ErrorCode::StateError,
-            ErrorSeverity::Recoverable,
-            "Attempted to read gravity vector while IMU is not running",
-            "IMU::getGravity"
-        );
-    }
-    uint8_t buffer[6];
-    if (!readBytes(REG_GRAVITY_LSB, buffer, 6)){
+IMU::Vector3 IMU::readGravityHw() {
+    uint8_t buffer[6]{};
+    if (!readBytes(REG_GRAVITY_LSB, buffer, 6)) {
         throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
             "Failed to read gravity vector",
-            "IMU::getGravity"
+            "IMU::readGravityHw"
         );
     }
 
-    int16_t x = (buffer[1] << 8) | buffer[0];
-    int16_t y = (buffer[3] << 8) | buffer[2];
-    int16_t z = (buffer[5] << 8) | buffer[4];
+    int16_t x = static_cast<int16_t>((buffer[1] << 8) | buffer[0]);
+    int16_t y = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
+    int16_t z = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
 
     return { x / 100.0, y / 100.0, z / 100.0 };
 }
 
-//really doesnt need commenting after youve seen all the others
-IMU::Vector3 IMU::getLinearAccel() {
-    if(running_ == false){
-        throw IMUError(
-            ErrorCode::StateError,
-            ErrorSeverity::Recoverable,
-            "Attempted to read linear acceleration while IMU is not running",
-            "IMU::getLinearAccel"
-        );
-    }
-    uint8_t buffer[6];
-    if (!readBytes(REG_LIN_ACCEL_LSB, buffer, 6)){
+IMU::Vector3 IMU::readLinearAccelHw() {
+    uint8_t buffer[6]{};
+    if (!readBytes(REG_LIN_ACCEL_LSB, buffer, 6)) {
         throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
             "Failed to read linear acceleration",
-            "IMU::getLinearAccel"
+            "IMU::readLinearAccelHw"
         );
     }
 
-    int16_t x = (buffer[1] << 8) | buffer[0];
-    int16_t y = (buffer[3] << 8) | buffer[2];
-    int16_t z = (buffer[5] << 8) | buffer[4];
+    int16_t x = static_cast<int16_t>((buffer[1] << 8) | buffer[0]);
+    int16_t y = static_cast<int16_t>((buffer[3] << 8) | buffer[2]);
+    int16_t z = static_cast<int16_t>((buffer[5] << 8) | buffer[4]);
 
     return { x / 100.0, y / 100.0, z / 100.0 };
 }
@@ -286,59 +345,63 @@ void IMU::dumpCaptureToCsvLocked(const std::string& path,
     out.close();
 }
 
-bool IMU::startupTasks(){
-    // Open I2C device file
+void IMU::startupTasks() {
     fd_ = open(I2C_BUS, O_RDWR);
     if (fd_ < 0) {
         throw IMUError(
-            ErrorCode::ProtocolError,
-            ErrorSeverity::Recoverable,
-            "Failed to open I2C bus",
-            "IMU:loop"
-        );
-    }
-
-    // Set the I2C address for the BNO055
-    if (ioctl(fd_, I2C_SLAVE, BNO055_ADDR) < 0) {
-        throw IMUError(
-            ErrorCode::DeviceUnreachable,
-            ErrorSeverity::Recoverable,
-            "Failed to connect to BNO055",
-            "IMU::loop"
-        );
-    }
-
-    // Set the BNO055 to NDOF (fusion) mode
-    if (!writeByte(REG_OPR_MODE, OPERATION_MODE_NDOF)) {
-        throw IMUError(
             ErrorCode::IOError,
             ErrorSeverity::Recoverable,
-            "Failed to set fusion mode",
-            "IMU::loop"
+            "Failed to open I2C bus",
+            "IMU::startupTasks"
         );
     }
-    return true;
+
+    try {
+        {
+            std::lock_guard<std::mutex> lk(device_mtx_);
+            if (ioctl(fd_, I2C_SLAVE, BNO055_ADDR) < 0) {
+                throw IMUError(
+                    ErrorCode::DeviceUnavailable,
+                    ErrorSeverity::Recoverable,
+                    "Failed to connect to BNO055",
+                    "IMU::startupTasks"
+                );
+            }
+        }
+
+        if (!writeByte(REG_OPR_MODE, OPERATION_MODE_NDOF)) {
+            throw IMUError(
+                ErrorCode::IOError,
+                ErrorSeverity::Recoverable,
+                "Failed to set fusion mode",
+                "IMU::startupTasks"
+            );
+        }
+    } catch (...) {
+        cleanupHardware();
+        throw;
+    }
 }
 
-void IMU::loop(){
+void IMU::loop() {
     state_ = ModuleState::Running;
-    while(running_){
-        auto start_time = std::chrono::steady_clock::now();
 
-        Vector3 linAcc = getLinearAccel();
-        Vector3 grav = getGravity();
-        EulerAngles eul = getEulerAngles();
-        Quaternion quat = getQuaternion();
-        CalibrationStatus cal = getCalibrationStatus();
+    while (running_) {
+        const auto start_time = std::chrono::steady_clock::now();
 
-        // Build one sample
         Sample s;
         s.t = start_time;
-        s.linAcc = linAcc;
-        s.grav = grav;
-        s.eul = eul;
-        s.quat = quat;
-        s.cal = cal;
+        s.linAcc = readLinearAccelHw();
+        s.grav   = readGravityHw();
+        s.eul    = readEulerAnglesHw();
+        s.quat   = readQuaternionHw();
+        s.cal    = readCalibrationStatusHw();
+
+        {
+            std::lock_guard<std::mutex> latest_lk(latest_sample_mtx_);
+            latest_sample_ = s;
+            latest_sample_valid_ = true;
+        }
 
         bool should_dump = false;
         std::chrono::steady_clock::time_point dump_start;
@@ -351,31 +414,23 @@ void IMU::loop(){
 
             buffer_.push_back(s);
 
-            // Keep only the last buffer_ms_ of data normally.
-            // But if a capture is armed, we must retain data back to capture_start_
-            // (otherwise by the time we reach capture_end_ we'd have dropped the pre-trigger samples).
             auto keep_from = start_time - std::chrono::milliseconds(buffer_ms_);
-            if (capture_active_) {
-                // capture_start_ is earlier than (start_time - buffer_ms_) once time has advanced,
-                // so keep_from must be the earlier of the two.
-                if (capture_start_ < keep_from) keep_from = capture_start_;
+            if (capture_active_ && capture_start_ < keep_from) {
+                keep_from = capture_start_;
             }
             while (!buffer_.empty() && buffer_.front().t < keep_from) {
                 buffer_.pop_front();
             }
 
-            // If capture is active and we've collected past the capture end, dump once.
             if (capture_active_ && start_time >= capture_end_) {
                 dump_start = capture_start_;
                 dump_end   = capture_end_;
                 dump_ref   = capture_ref_;
 
-                // Simple filename: imu_capture_<index>.csv
                 std::ostringstream oss;
                 oss << "/home/pi/imuCaptures/imu_capture_" << capture_index_++ << ".csv";
                 dump_path = oss.str();
 
-                // Mark capture as completed before writing so triggerCapture can be used again.
                 capture_active_ = false;
                 should_dump = true;
             }
@@ -392,10 +447,8 @@ void IMU::loop(){
                 0
             };
             q_.push(std::move(ev));
-
         }
 
-        // Rate limit: aim for ~sample_period_ms_
         const auto elapsed = std::chrono::steady_clock::now() - start_time;
         const auto target = std::chrono::milliseconds(sample_period_ms_);
         if (elapsed < target) {
