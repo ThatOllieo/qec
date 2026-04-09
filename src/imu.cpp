@@ -154,31 +154,31 @@ void IMU::stop() {
     }
 }
 
-IMU::CalibrationStatus IMU::getCalibrationStatus() {
+IMU::CalibrationStatus IMU::getCalibrationStatus() const {
     std::lock_guard<std::mutex> lk(latest_sample_mtx_);
     ensureSampleAvailable("IMU::getCalibrationStatus");
     return latest_sample_.cal;
 }
 
-IMU::EulerAngles IMU::getEulerAngles() {
+IMU::EulerAngles IMU::getEulerAngles() const {
     std::lock_guard<std::mutex> lk(latest_sample_mtx_);
     ensureSampleAvailable("IMU::getEulerAngles");
     return latest_sample_.eul;
 }
 
-IMU::Quaternion IMU::getQuaternion() {
+IMU::Quaternion IMU::getQuaternion() const {
     std::lock_guard<std::mutex> lk(latest_sample_mtx_);
     ensureSampleAvailable("IMU::getQuaternion");
     return latest_sample_.quat;
 }
 
-IMU::Vector3 IMU::getGravity() {
+IMU::Vector3 IMU::getGravity() const {
     std::lock_guard<std::mutex> lk(latest_sample_mtx_);
     ensureSampleAvailable("IMU::getGravity");
     return latest_sample_.grav;
 }
 
-IMU::Vector3 IMU::getLinearAccel() {
+IMU::Vector3 IMU::getLinearAccel() const {
     std::lock_guard<std::mutex> lk(latest_sample_mtx_);
     ensureSampleAvailable("IMU::getLinearAccel");
     return latest_sample_.linAcc;
@@ -361,7 +361,7 @@ void IMU::startupTasks() {
             std::lock_guard<std::mutex> lk(device_mtx_);
             if (ioctl(fd_, I2C_SLAVE, BNO055_ADDR) < 0) {
                 throw IMUError(
-                    ErrorCode::DeviceUnavailable,
+                    ErrorCode::DeviceUnreachable,
                     ErrorSeverity::Recoverable,
                     "Failed to connect to BNO055",
                     "IMU::startupTasks"
