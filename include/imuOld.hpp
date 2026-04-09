@@ -55,31 +55,20 @@ public:
         CalibrationStatus cal;
     };
 
-    CalibrationStatus getCalibrationStatus() const;
-    EulerAngles getEulerAngles() const;
-    Quaternion getQuaternion() const;
-    Vector3 getGravity() const;
-    Vector3 getLinearAccel() const;
+    CalibrationStatus getCalibrationStatus();
+    EulerAngles getEulerAngles();
+    Quaternion getQuaternion();
+    Vector3 getGravity();
+    Vector3 getLinearAccel();
 
     void triggerCapture(int milliseconds);
 
-    std::string getLastError() const;
-    ModuleState state() const { return state_.load(); }
+    ModuleState state() {return state_;};
 
 private:
-    std::atomic<ModuleState> state_{ModuleState::Stopped};
-    void startupTasks();
+    ModuleState state_ = ModuleState::Stopped;
+    bool startupTasks();
     void loop();
-
-    CalibrationStatus readCalibrationStatusHw();
-    EulerAngles readEulerAnglesHw();
-    Quaternion readQuaternionHw();
-    Vector3 readGravityHw();
-    Vector3 readLinearAccelHw();
-
-    void setFailedState(const std::string& message);
-    void cleanupHardware() noexcept;
-    void ensureSampleAvailable(const char* caller) const;
 
     TSQueue<Event>& q_;
     std::thread th_;
@@ -87,13 +76,12 @@ private:
 
     int fd_{-1};
     std::ofstream file;
-    mutable std::mutex device_mtx_;
 
     bool writeByte(uint8_t reg, uint8_t value);
     bool readBytes(uint8_t reg, uint8_t* buffer, size_t length);
 
     // Ring buffer length (how much history we keep in RAM)
-    int buffer_ms_ = 5000; // 5 seconds
+    int buffer_ms_ = 5000; // 10 seconds
 
     // IMU sampling period (approx). 20 ms = 50 Hz.
     int sample_period_ms_ = 20;
@@ -101,10 +89,6 @@ private:
     // Buffer of recent samples
     std::deque<Sample> buffer_;
     std::mutex mtx_;
-
-    mutable std::mutex latest_sample_mtx_;
-    Sample latest_sample_{};
-    bool latest_sample_valid_{false};
 
     // Capture state
     bool capture_active_ = false;
@@ -115,9 +99,6 @@ private:
 
     // Simple capture file naming
     uint64_t capture_index_ = 0;
-
-    mutable std::mutex error_mtx_;
-    std::string last_error_;
 
     void dumpCaptureToCsvLocked(const std::string& path,
                                const std::chrono::steady_clock::time_point& start,
