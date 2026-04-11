@@ -60,6 +60,23 @@ float getCPUTemperature() {
     }
 }
 
+// --- Logging/Helper functions ---
+static const char* severityTag(ErrorSeverity severity) {
+    switch (severity) {
+        case ErrorSeverity::Warning:     return "[WARN]";
+        case ErrorSeverity::Recoverable: return "[ERROR]";
+        case ErrorSeverity::Fatal:       return "[FATAL]";
+    }
+    return "[ERROR]";
+}
+
+static void logStartupFailure(const char* module, const char* action, const QecException& ex) {
+    std::cerr << severityTag(ex.severity())
+              << '[' << module << "] "
+              << action << ": "
+              << ex.what() << '\n';
+}
+
 // Pending async plans for tracking replies (when this file makes requests and sends commands)
 static std::unordered_map<uint16_t, std::function<void(const std::vector<uint8_t>&)>> telem_plans;
 static std::unordered_map<uint16_t, std::function<void()>> cmd_plans;
@@ -74,9 +91,13 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
             return {static_cast<uint8_t>(deploy.getState())};
             break;
         //cpu temp
-        case 0x0003:
-            return {getCPUTemperature()};
-            break;
+        case 0x0003: {
+            std::vector<uint8_t> pkt;
+            float temp = getCPUTemperature();
+            pkt.reserve(sizeof(float));
+            appendBytes(pkt, temp);
+            return pkt;
+        }
         
         //imu calibration status
         case 0x2010: {
@@ -87,38 +108,36 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
         case 0x2020: {
             std::vector<uint8_t> pkt;
             IMU::EulerAngles eulang = imu.getEulerAngles();
-            pkt.reserve(64);
+            pkt.reserve(3 * sizeof(float));
             appendBytes(pkt, eulang.heading);
             appendBytes(pkt, eulang.roll);
             appendBytes(pkt, eulang.pitch);
-            return {pkt};
+            return pkt;
             break;
         }
-            
 
         //imu quaternion
         case 0x2030: {
             std::vector<uint8_t> pkt;
             IMU::Quaternion quat = imu.getQuaternion();
-            pkt.reserve(64);
+            pkt.reserve(4 * sizeof(float));
             appendBytes(pkt, quat.w);
             appendBytes(pkt, quat.x);
             appendBytes(pkt, quat.y);
             appendBytes(pkt, quat.z);
-            return {pkt};
+            return pkt;
             break;
         }
-            
 
         //imu gravity vector
         case 0x2040: {
             std::vector<uint8_t> pkt;
             IMU::Vector3 grav = imu.getGravity();
-            pkt.reserve(64);
+            pkt.reserve(3 * sizeof(float));
             appendBytes(pkt, grav.x);
             appendBytes(pkt, grav.y);
             appendBytes(pkt, grav.z);
-            return {pkt};
+            return pkt;
             break;
         }
 
@@ -126,11 +145,11 @@ static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWat
         case 0x2050:{
             std::vector<uint8_t> pkt;
             IMU::Vector3 linacc = imu.getLinearAccel();
-            pkt.reserve(64);
+            pkt.reserve(3 * sizeof(float));
             appendBytes(pkt, linacc.x);
             appendBytes(pkt, linacc.y);
             appendBytes(pkt, linacc.z);
-            return {pkt};
+            return pkt;
             break;
         }
 
@@ -290,31 +309,56 @@ int run() {
     cfg.jpeg_quality = 50;
     */
     
-    try{
+    try {
         cams.startup(cfg);
     }
-    catch(const CamsError& ex){
-        std::cerr << "[WARN] Failed to start cameras. " << ex.what() << '\n';
+    catch (const CamsError& ex) {
+        logStartupFailure("CAMS", "Failed to start cameras", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][CAMS] Failed to start cameras with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][CAMS] Failed to start cameras with unknown exception\n";
+        return 1;
     }
 
     //Deployment switch, configured so that on release of the switch, an event is pushed to the main list
     DeploymentWatcher deploy(eventList);
-    try{
+    try {
         deploy.start();
     }
-    catch(const DeployWatchError& ex){
-        std::cerr << "Error starting deployment watcher, cannot continue.\n";
-        throw; 
+    catch (const DeployWatchError& ex) {
+        logStartupFailure("DEPLOY", "Failed to start deployment watcher", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
     }
-    
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][DEPLOY] Failed to start deployment watcher with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][DEPLOY] Failed to start deployment watcher with unknown exception\n";
+        return 1;
+    }
 
     //Imu is started, required for the IMU telemetry requests or other onboard use
     IMU imu(eventList);
-    try{
+    try {
         imu.start();
     }
-    catch(const IMUError& ex){
-        std::cerr << "[WARN] Failed to start IMU. " << ex.what() << '\n';
+    catch (const IMUError& ex) {
+        logStartupFailure("IMU", "Failed to start IMU", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][IMU] Failed to start IMU with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][IMU] Failed to start IMU with unknown exception\n";
+        return 1;
     }
 
     //Comms manager is what handles all off board communications, incoming messages become events in the main list, and main thread can
@@ -328,16 +372,25 @@ int run() {
     //auto tcp = std::make_unique<TcpChannel>(tcpcfg);
     //comms.register_channel(std::move(tcp));
 
-    try{
+    try {
         UdpConfig udpcfg;
-        auto udp =  std::make_unique<UdpChannel>(udpcfg);
+        auto udp = std::make_unique<UdpChannel>(udpcfg);
         comms.register_channel(std::move(udp));
     }
-    catch(const CommsError& ex){
-        std::cerr << "[FATAL] Failed to setup and register UDP channel. " << ex.what() << "\n";
+    catch (const CommsError& ex) {
+        logStartupFailure("COMMS", "Failed to setup and register UDP channel", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register UDP channel with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register UDP channel with unknown exception\n";
+        return 1;
     }
 
-    try{
+    try {
         RadioConfig rcfg;
         rcfg.freq_hz = 434'000'000;
         rcfg.pa_high   = true;
@@ -352,16 +405,33 @@ int run() {
         auto radio = std::make_unique<RadioChannel>(rcfg);
         comms.register_channel(std::move(radio));
     }
-    catch(const CommsError& ex){
-        std::cerr << "[FATAL] Failed to setup and register RADIO channel. " << ex.what() << '\n';
+    catch (const CommsError& ex) {
+        logStartupFailure("COMMS", "Failed to setup and register RADIO channel", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register RADIO channel with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register RADIO channel with unknown exception\n";
+        return 1;
     }
 
-    try{
+    try {
         comms.start();
     }
-    catch(const CommsError& ex){
-        std::cerr << "Error starting comms manager, cannot continue.\n";
-        throw;
+    catch (const CommsError& ex) {
+        logStartupFailure("COMMS", "Failed to start comms manager", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][COMMS] Failed to start comms manager with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][COMMS] Failed to start comms manager with unknown exception\n";
+        return 1;
     }
 
 
@@ -403,8 +473,8 @@ int run() {
                         try{
                             cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
                         }
-                        catch(CamsError& ex){
-                            std::cerr << "[WARN] " << ex.what() << '\n';
+                        catch (const CamsError& ex) {
+                            std::cerr << severityTag(ex.severity()) << "[CAMS] " << ex.what() << '\n';
                         }
                     }
                     
@@ -518,17 +588,17 @@ int run() {
             }
         }
         catch(const QecException& ex){
-            std::cerr << "[EVENT ERROR] seq=" << e.seq
+            std::cerr << "[ERROR][MAIN] seq=" << e.seq
                 << " type=" << static_cast<int>(e.type)
                 << " " << ex.what() << '\n';
         }
         catch(const std::exception& ex){
-            std::cerr << "[EVENT ERROR] seq=" << e.seq
+            std::cerr << "[ERROR][MAIN] seq=" << e.seq
                 << " type=" << static_cast<int>(e.type)
                 << " std::exception: " << ex.what() << '\n';
         }
         catch(...){
-            std::cerr << "[EVENT ERROR] seq=" << e.seq
+            std::cerr << "[ERROR][MAIN] seq=" << e.seq
                 << " type=" << static_cast<int>(e.type)
                 << " unknown exception\n";
         }

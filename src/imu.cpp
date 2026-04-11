@@ -115,15 +115,18 @@ void IMU::start() {
             try {
                 loop();
             } catch (const IMUError& ex) {
+                if(ex.severity == ErrorSeverity::Fatal){std::cerr << "[FATAL]"}
+                else if(ex.severity == ErrorSeverity::Recoverable){std::cerr << "[ERROR]";}
+                else{std::cerr << "[WARNING]";}
                 std::cerr << "[IMU] Worker thread failed: " << ex.what() << "\n";
                 setFailedState(ex.what());
                 cleanupHardware();
             } catch (const std::exception& ex) {
-                std::cerr << "[IMU] Worker thread failed with std::exception: " << ex.what() << "\n";
+                std::cerr << "[?][IMU] Worker thread failed with std::exception: " << ex.what() << "\n";
                 setFailedState(ex.what());
                 cleanupHardware();
             } catch (...) {
-                std::cerr << "[IMU] Worker thread failed with unknown exception\n";
+                std::cerr << "[?][IMU] Worker thread failed with unknown exception\n";
                 setFailedState("Unknown IMU worker failure");
                 cleanupHardware();
             }
