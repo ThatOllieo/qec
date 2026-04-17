@@ -61,15 +61,6 @@ float getCPUTemperature() {
 }
 
 // --- Logging/Helper functions ---
-static const char* severityTag(ErrorSeverity severity) {
-    switch (severity) {
-        case ErrorSeverity::Warning:     return "[WARN]";
-        case ErrorSeverity::Recoverable: return "[ERROR]";
-        case ErrorSeverity::Fatal:       return "[FATAL]";
-    }
-    return "[ERROR]";
-}
-
 static void logStartupFailure(const char* module, const char* action, const QecException& ex) {
     std::cerr << severityTag(ex.severity())
               << '[' << module << "] "

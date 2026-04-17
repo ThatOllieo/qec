@@ -6,6 +6,16 @@
 #include <utility>
 #include <sstream>
 
+
+static const char* severityTag(ErrorSeverity severity) {
+    switch (severity) {
+        case ErrorSeverity::Warning:     return "[WARN]";
+        case ErrorSeverity::Recoverable: return "[ERROR]";
+        case ErrorSeverity::Fatal:       return "[FATAL]";
+    }
+    return "[ERROR]";
+}
+
 enum class ErrorCode{
     Unknown,
     InvalidArgument,

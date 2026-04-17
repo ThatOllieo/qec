@@ -9,6 +9,8 @@
 #include <mutex>
 #include <chrono>
 
+#include "exceptions.hpp"
+
 class CommsManager {
 public:
     explicit CommsManager(TSQueue<Event>& main_events);
@@ -69,6 +71,7 @@ private:
         std::thread rebooter;
     };
     std::unordered_map<ChannelId, ChanWrap> chans_;
+    std::mutex chans_mx_;
 
     void on_channel_state(ChannelId id, ChannelState st);
     void schedule_reconnect(ChannelId id);
