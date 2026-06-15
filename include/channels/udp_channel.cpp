@@ -91,83 +91,87 @@ void UdpChannel::close_sock(){
     }
 }
 
-void UdpChannel::send(const CommsMessage& msg){
+bool UdpChannel::send(const CommsMessage& msg){
+    if (state_.load(std::memory_order_relaxed) != ChannelState::Running) {
+        std::cerr << "[UdpChannel] send() called on non-running channel, dropping\n";
+        return false;
+    }
+    if (msg.dest >= dest_addrs_.size()) {
+        std::cerr << "[UdpChannel] send() dest ID " << int(msg.dest) << " out of range, dropping\n";
+        return false;
+    }
     TxItem item;
     item.frame = serialize(msg);
     item.dest  = dest_addrs_[msg.dest];
     tx_items_.push(std::move(item));
+    return true;
 }
 
 void UdpChannel::tx_loop() {
-    while (running_) {
-        auto item = tx_items_.pop(); // blocks
-        if (!running_) break;
-        if (item.frame.empty()) continue; // nudge frame
+    try {
+        while (running_) {
+            auto item = tx_items_.pop();
+            if (!running_) break;
+            if (item.frame.empty()) continue; // nudge
 
-        // UDP datagram: one send = one packet
-        ssize_t r = ::sendto(sock_, item.frame.data(), item.frame.size(), 0,
-                             (sockaddr*)&item.dest, sizeof(item.dest));
-        if (r < 0) {
-            std::perror("[UdpChannel] sendto");
-            set_state(ChannelState::Failed);
-            break;
+            ssize_t r = ::sendto(sock_, item.frame.data(), item.frame.size(), 0,
+                                 (sockaddr*)&item.dest, sizeof(item.dest));
+            if (r < 0) {
+                std::perror("[UdpChannel] sendto error, marking channel Failed");
+                set_state(ChannelState::Failed);
+                break;
+            }
+            if (size_t(r) != item.frame.size()) {
+                std::cerr << "[UdpChannel] partial send (sent=" << r
+                          << " expected=" << item.frame.size() << "), marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                break;
+            }
         }
-        if (size_t(r) != item.frame.size()) {
-            std::cerr << "[UdpChannel] partial send? sent=" << r
-                      << " expected=" << item.frame.size() << "\n";
-            // Generally, UDP sendto is all-or-nothing; treat as failure.
-            set_state(ChannelState::Failed);
-            break;
-        }
+    } catch (const std::exception& e) {
+        std::cerr << "[UdpChannel] tx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[UdpChannel] tx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 
 void UdpChannel::rx_loop() {
-    // Choose a buffer size that comfortably fits your max message.
-    // UDP max is 65507 payload for IPv4, but fragmentation is bad.
-    // If you keep your messages <= ~1200 bytes you're happiest.
-    std::vector<uint8_t> buf(2048);
+    try {
+        std::vector<uint8_t> buf(2048);
+        while (running_) {
+            sockaddr_in sender{};
+            socklen_t sender_len = sizeof(sender);
 
-    while (running_) {
-        sockaddr_in sender{};
-        socklen_t sender_len = sizeof(sender);
+            ssize_t n = ::recvfrom(sock_, buf.data(), buf.size(), 0,
+                                   (sockaddr*)&sender, &sender_len);
 
-        ssize_t n = ::recvfrom(sock_, buf.data(), buf.size(), 0,
-                               (sockaddr*)&sender, &sender_len);
+            if (n < 0) {
+                if (!running_) break;
+                continue; // SO_RCVTIMEO timeout — normal, keep looping
+            }
+            if (n == 0) continue; // empty datagram — ignore
 
-        if (n < 0) {
-            // With SO_RCVTIMEO you will get EAGAIN/EWOULDBLOCK periodically.
-            if (!running_) break;
-            continue;
+            if (static_cast<size_t>(n) < 2) {
+                std::cerr << "[UdpChannel] datagram too small (" << n << " bytes), dropping\n";
+                continue;
+            }
+
+            std::vector<uint8_t> f(buf.begin(), buf.begin() + n);
+            CommsMessage m{};
+            if (parse(f, m)) {
+                if (on_receive_) on_receive_(m);
+            } else {
+                std::cerr << "[UdpChannel] parse failed, dropping datagram (size=" << f.size() << ")\n";
+            }
         }
-        if (n == 0) {
-            // UDP "0 bytes" is unusual but possible; ignore.
-            continue;
-        }
-
-        std::vector<uint8_t> f(buf.begin(), buf.begin() + n);
-
-        // Debug: show sender + LEN bytes if present
-        if (f.size() >= 2) {
-            uint8_t lenbuf[2]{ f[0], f[1] };
-            uint16_t body_len = get16(lenbuf);
-
-            std::cerr << "[UdpChannel] from " << inet_ntoa(sender.sin_addr)
-                      << ":" << ntohs(sender.sin_port)
-                      << " LEN bytes: 0x" << std::hex << int(lenbuf[0])
-                      << " 0x" << int(lenbuf[1])
-                      << " (little-endian body_len=" << std::dec << body_len << ")\n";
-        } else {
-            std::cerr << "[UdpChannel] datagram too small (" << f.size() << ")\n";
-            continue;
-        }
-
-        CommsMessage m{};
-        if (parse(f, m)) {
-            if (on_receive_) on_receive_(m);
-        } else {
-            std::cerr << "[UdpChannel] parse failed, dropping datagram (size=" << f.size() << ")\n";
-        }
+    } catch (const std::exception& e) {
+        std::cerr << "[UdpChannel] rx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[UdpChannel] rx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 

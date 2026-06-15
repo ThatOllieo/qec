@@ -4,19 +4,21 @@
 #include <variant>
 #include <vector>
 #include "comms_message.hpp"
+#include "exceptions.hpp"
 
 //============ EVENT TYPES ==========
 enum class EventType {
     PhotoTaken,
-    MotionCaptured,         
-    NeedTelem,          
-    DeploymentTriggered, 
+    MotionCaptured,
+    NeedTelem,
+    DeploymentTriggered,
     Command,
     TelemetryRequest,
     TelemetryArrived,
     TelemetryFailed,
     CommandAcked,
     CommandFailed,
+    ModuleFailed,
 };
 
 //=========== PAYLOAD TYPES ===========
@@ -52,18 +54,20 @@ struct EvTelemetryArrived { uint16_t correlation_id; std::vector<uint8_t> bytes;
 struct EvTelemetryFailed { uint16_t correlation_id; std::string reason; };
 struct EvCommandAcked { uint16_t correlation_id; };
 struct EvCommandFailed { uint16_t correlation_id; std::string reason; };
+struct EvModuleFailed { std::string module; std::string reason; ErrorSeverity severity; };
 
 //======= WRAPPER =======
 using EventPayload = std::variant<
-    EvPhotoTaken, 
+    EvPhotoTaken,
     EvMotionCaptured,
-    EvDeploymentTriggered, 
-    EvCommand, 
+    EvDeploymentTriggered,
+    EvCommand,
     EvTelemetryRequest,
     EvTelemetryArrived,
     EvTelemetryFailed,
     EvCommandAcked,
-    EvCommandFailed
+    EvCommandFailed,
+    EvModuleFailed
 >;
 
 //========= EVENT STRUCTURE =======

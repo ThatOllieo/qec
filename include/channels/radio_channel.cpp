@@ -162,25 +162,30 @@ void RadioChannel::stop() {
     set_state(ChannelState::Stopped);
 }
 
-void RadioChannel::send(const CommsMessage& msg) {
-    auto frame = serialize(msg);
-
-    // Safety: RFM69 demo configured for <= 65 bytes total (1 len + ≤64 data).
-    // Our PHY payload is: [plen][frame-bytes...], where plen = frame.size().
-    // Keep a margin: require frame.size() <= 60 bytes.
-    if (frame.size() > 60) {
-        std::cerr << "[RadioChannel] frame too large for current RFM69 setup ("
-                  << frame.size() << " > 60). Implement fragmentation.\n";
-        return; // or throw
+bool RadioChannel::send(const CommsMessage& msg) {
+    if (state_.load(std::memory_order_relaxed) != ChannelState::Running) {
+        std::cerr << "[RadioChannel] send() called on non-running channel, dropping\n";
+        return false;
     }
 
-    // The demo FIFO expects first byte = payload length (<= 64), then payload
+    auto frame = serialize(msg);
+
+    // RFM69 FIFO limit: 1 byte length prefix + up to 64 bytes payload = 65 bytes total.
+    // Keep a margin so the length byte itself always fits: frame.size() <= 60.
+    if (frame.size() > 60) {
+        std::cerr << "[RadioChannel] frame too large for RFM69 FIFO ("
+                  << frame.size() << " > 60 bytes). Message dropped.\n";
+        return false;
+    }
+
+    // PHY packet: [plen (1 byte)][frame bytes...]
     std::vector<uint8_t> phy;
     phy.reserve(1 + frame.size());
     phy.push_back(static_cast<uint8_t>(frame.size()));
     phy.insert(phy.end(), frame.begin(), frame.end());
 
     tx_frames_.push(std::move(phy));
+    return true;
 }
 
 // ---------------------------------------------
@@ -188,38 +193,50 @@ void RadioChannel::send(const CommsMessage& msg) {
 // ---------------------------------------------
 
 void RadioChannel::tx_loop() {
-    while (running_) {
-        auto phy = tx_frames_.pop();
-        if (!running_) break;
-        if (phy.empty()) continue; // nudge
+    try {
+        while (running_) {
+            auto phy = tx_frames_.pop();
+            if (!running_) break;
+            if (phy.empty()) continue; // nudge
 
-        // Strip the leading length for our helper; hw_tx_packet expects only payload
-        if (phy.size() < 1) continue;
-        std::vector<uint8_t> payload(phy.begin() + 1, phy.end());
+            std::vector<uint8_t> payload(phy.begin() + 1, phy.end());
 
-        if (!hw_tx_packet(payload)) {
-            std::cerr << "[RadioChannel] TX failed\n";
-            set_state(ChannelState::Failed);
-            break;
+            if (!hw_tx_packet(payload)) {
+                std::cerr << "[RadioChannel] TX failed, marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                break;
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "[RadioChannel] tx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[RadioChannel] tx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 
 void RadioChannel::rx_loop() {
-    // Poll RX; each packet returned is already the PHY payload (your frame)
-    std::vector<uint8_t> frame;
-    while (running_) {
-        frame.clear();
-        if (!hw_rx_once(frame, 0.100)) { // 100 ms poll
-            continue; // timeout/no packet
+    try {
+        std::vector<uint8_t> frame;
+        while (running_) {
+            frame.clear();
+            if (!hw_rx_once(frame, 0.100)) {
+                continue; // timeout or bad CRC — keep polling
+            }
+            CommsMessage m{};
+            if (parse(frame, m)) {
+                if (rx_cb_) rx_cb_(m);
+            } else {
+                std::cerr << "[RadioChannel] parse failed (size=" << frame.size() << ")\n";
+            }
         }
-        // Expect your frame: [LEN(2)] + [TYPE(1)] + [CID(2)] + [SRC(1)] + [DST(1)] + payload
-        CommsMessage m{};
-        if (parse(frame, m)) {
-            if (rx_cb_) rx_cb_(m);
-        } else {
-            std::cerr << "[RadioChannel] parse failed (size=" << frame.size() << ")\n";
-        }
+    } catch (const std::exception& e) {
+        std::cerr << "[RadioChannel] rx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[RadioChannel] rx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 

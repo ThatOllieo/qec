@@ -123,28 +123,34 @@ void CommsManager::send(const CommsMessage& msg) {
 
 //loops through the inbound queue and processes each message
 void CommsManager::inbound_loop() {
-    try{
-        while (running_) {
+    while (running_) {
+        try {
             CommsMessage in = inbound_.pop();
             if (!running_) break;
             raise_semantic_event_and_track_route(in);
+        } catch (const CommsError& ex) {
+            std::cerr << severityTag(ex.severity()) << "[COMMS] inbound_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"inbound_worker", ex.what(), ex.severity()};
+            main_events_.push(std::move(e));
+        } catch (const std::exception& ex) {
+            std::cerr << "[ERROR][COMMS] inbound_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"inbound_worker", ex.what(), ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
+        } catch (...) {
+            std::cerr << "[ERROR][COMMS] inbound_loop unknown error\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"inbound_worker", "unknown exception", ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
         }
-    }
-    catch(const CommsError& ex){
-        std::cerr << severityTag(ex.severity()) << "[COMMS] Inbound loop failed with CommsError: " << ex.what() << "\n";
-    }
-    catch(const std::exception& ex){
-        std::cerr << "[ERROR][COMMS] Inbound loop failed with std::exception: " << ex.what() << "\n";
-    }
-    catch(...){
-        std::cerr << "[ERROR][COMMS] Inbound loop failed with unknown exception\n";
     }
 }
 
 //loops through commsMessages in the outbound queue, finds the best ChannelId to send it on and passes it to that channel
 void CommsManager::outbound_loop() {
-    try{
-        while (running_) {
+    while (running_) {
+        try {
             CommsMessage out = outbound_.pop();
             if (!running_) break;
             ChannelId via = (out.channel_hint == ChannelId::Auto) ? ChannelId::Wifi : out.channel_hint;
@@ -153,21 +159,35 @@ void CommsManager::outbound_loop() {
             {
                 std::lock_guard<std::mutex> lk(chans_mx_);
                 auto it = chans_.find(via);
-                if(it != chans_.end()){
+                if (it != chans_.end()) {
                     ch = it->second.ch.get();
                 }
             }
-            if(ch) ch->send(out);
+            if (ch) {
+                if (!ch->send(out)) {
+                    std::cerr << "[WARN][COMMS] send() rejected message on channel "
+                              << static_cast<int>(via) << " (frame too large or channel not ready)\n";
+                }
+            } else {
+                std::cerr << "[WARN][COMMS] No channel registered for ChannelId="
+                          << static_cast<int>(via) << ", message dropped\n";
+            }
+        } catch (const CommsError& ex) {
+            std::cerr << severityTag(ex.severity()) << "[COMMS] outbound_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"outbound_worker", ex.what(), ex.severity()};
+            main_events_.push(std::move(e));
+        } catch (const std::exception& ex) {
+            std::cerr << "[ERROR][COMMS] outbound_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"outbound_worker", ex.what(), ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
+        } catch (...) {
+            std::cerr << "[ERROR][COMMS] outbound_loop unknown error\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"outbound_worker", "unknown exception", ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
         }
-    }
-    catch(const CommsError& ex){
-        std::cerr << severityTag(ex.severity()) << "[COMMS] Outbound loop failed with CommsError: " << ex.what() << "\n";
-    }
-    catch(const std::exception& ex){
-        std::cerr << "[ERROR][COMMS] Outbound loop failed with std::exception: " << ex.what() << "\n";
-    }
-    catch(...){
-        std::cerr << "[ERROR][COMMS] Outbound loop failed with unknown exception\n";
     }
 }
 
@@ -260,52 +280,53 @@ void CommsManager::on_channel_state(ChannelId id, ChannelState st) {
 // used to add a delay before trying to reconnect
 void CommsManager::schedule_reconnect(ChannelId id) {
     for (;;) {
-        try{
+        if (!running_) return; // CommsManager is shutting down
+
+        try {
             std::chrono::milliseconds backoff{0};
             IChannel *ch = nullptr;
             {
                 std::lock_guard<std::mutex> lk(chans_mx_);
                 auto it = chans_.find(id);
-                if (it == chans_.end()) return; // removed
+                if (it == chans_.end()) return; // channel removed
 
                 auto& cw = it->second;
-                if (!cw.autoreconnect) return;   // disabled
-                if (cw.state == ChannelState::Running) return; // already up
+                if (!cw.autoreconnect) return;
+                if (cw.state == ChannelState::Running) return;
 
                 backoff = cw.backoff;
                 ch = cw.ch.get();
             }
 
             std::this_thread::sleep_for(backoff);
-            if(!ch) return; // channel disappeared
-            // try restart
+            if (!running_) return; // check again after sleep — may have slept for up to backoff_max
+            if (!ch) return;
+
             ch->stop();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!running_) return;
             ch->start();
 
             {
                 std::lock_guard<std::mutex> lk(chans_mx_);
                 auto it = chans_.find(id);
-                if (it == chans_.end()) return; // removed
+                if (it == chans_.end()) return;
 
                 auto& cw = it->second;
-                // exponential backoff with cap for subsequent attempts
                 cw.backoff = std::min(cw.backoff * 2, cw.backoff_max);
 
-                // Let loop check state again; channel will report Running/Failed via on_channel_state
-                // Break if someone disabled autoreconnect in the meantime
                 if (!cw.autoreconnect) return;
                 if (cw.state == ChannelState::Running) return;
             }
-        }
-        catch(const CommsError& ex){
-            std::cerr << severityTag(ex.severity()) << "[COMMS] Reconnect loop for channel " << static_cast<int>(id) << " failed with CommsError: " << ex.what() << "\n";
-        }
-        catch(const std::exception& ex){
-            std::cerr << "[ERROR][COMMS] Reconnect loop for channel " << static_cast<int>(id) << " failed with std::exception: " << ex.what() << "\n";
-        }
-        catch(...){
-            std::cerr << "[ERROR][COMMS] Reconnect loop for channel " << static_cast<int>(id) << " failed with unknown exception\n";
+        } catch (const CommsError& ex) {
+            std::cerr << severityTag(ex.severity()) << "[COMMS] Reconnect for channel "
+                      << static_cast<int>(id) << " error: " << ex.what() << "\n";
+        } catch (const std::exception& ex) {
+            std::cerr << "[ERROR][COMMS] Reconnect for channel "
+                      << static_cast<int>(id) << " error: " << ex.what() << "\n";
+        } catch (...) {
+            std::cerr << "[ERROR][COMMS] Reconnect for channel "
+                      << static_cast<int>(id) << " unknown error\n";
         }
     }
 }
@@ -401,8 +422,8 @@ uint16_t CommsManager::send_command_async(uint8_t dest,
 
 void CommsManager::pending_supervisor_loop() {
     using namespace std::chrono;
-    try{
-        while (pending_running_) {
+    while (pending_running_) {
+        try {
             std::this_thread::sleep_for(50ms);
             std::vector<std::pair<uint16_t, PendingEntry>> expired;
             {
@@ -421,16 +442,13 @@ void CommsManager::pending_supervisor_loop() {
                 auto corr = kv.first;
                 auto pe   = std::move(kv.second);
                 if (pe.retries_left > 0) {
-                    // retry with same correlation id
                     CommsMessage resend = pe.original;
-                    // Keep the same corr id and routing
                     outbound_.push(resend);
-                    pe.deadline = std::chrono::steady_clock::now() + 500ms;
+                    pe.deadline = steady_clock::now() + 500ms;
                     pe.retries_left--;
                     std::lock_guard<std::mutex> lk(pending_mx_);
                     pending_.emplace(corr, std::move(pe));
                 } else {
-                    // final failure → post event
                     if (pe.expect_type == MessageType::I_TLM_PT) {
                         EvTelemetryFailed d; d.correlation_id = corr; d.reason = "timeout";
                         Event e; e.type = EventType::TelemetryFailed; e.data = std::move(d);
@@ -442,16 +460,22 @@ void CommsManager::pending_supervisor_loop() {
                     }
                 }
             }
+        } catch (const CommsError& ex) {
+            std::cerr << severityTag(ex.severity()) << "[COMMS] pending_supervisor_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"pending_supervisor", ex.what(), ex.severity()};
+            main_events_.push(std::move(e));
+        } catch (const std::exception& ex) {
+            std::cerr << "[ERROR][COMMS] pending_supervisor_loop error: " << ex.what() << "\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"pending_supervisor", ex.what(), ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
+        } catch (...) {
+            std::cerr << "[ERROR][COMMS] pending_supervisor_loop unknown error\n";
+            Event e; e.type = EventType::ModuleFailed;
+            e.data = EvModuleFailed{"pending_supervisor", "unknown exception", ErrorSeverity::Recoverable};
+            main_events_.push(std::move(e));
         }
-    }
-    catch(const CommsError& ex){
-        std::cerr << severityTag(ex.severity()) << "[COMMS] Pending supervisor loop failed with CommsError: " << ex.what() << "\n";
-    }
-    catch(const std::exception& ex){
-        std::cerr << "[ERROR][COMMS] Pending supervisor loop failed with std::exception: " << ex.what() << "\n";
-    }
-    catch(...){
-        std::cerr << "[ERROR][COMMS] Pending supervisor loop failed with unknown exception\n";
     }
 }
 

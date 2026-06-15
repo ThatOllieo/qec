@@ -11,8 +11,9 @@ public:
     virtual bool start() = 0;
     virtual void stop() = 0;
 
-    // CommsManager calls this to transmit a logical message; channel serializes it
-    virtual void send(const CommsMessage& msg) = 0;
+    // CommsManager calls this to transmit a logical message; channel serializes it.
+    // Returns false if the message was rejected (e.g. oversized, channel not ready).
+    virtual bool send(const CommsMessage& msg) = 0;
 
     // CommsManager sets this callback; channel calls it when it reassembles a message
     using RxCallback = std::function<void(const CommsMessage&)>;

@@ -575,6 +575,13 @@ int run() {
                     cmd_plans.erase(c2.correlation_id);
                     break;
                 }
+                // background worker or channel reported a structural failure
+                case EventType::ModuleFailed: {
+                    const auto& mf = std::get<EvModuleFailed>(e.data);
+                    std::cerr << severityTag(mf.severity) << "[MAIN] module='"
+                              << mf.module << "' reason='" << mf.reason << "'\n";
+                    break;
+                }
                 default: break;
             }
         }

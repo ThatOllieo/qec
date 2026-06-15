@@ -39,7 +39,7 @@ public:
 
     bool start() override;
     void stop() override;
-    void send(const CommsMessage& msg) override;
+    bool send(const CommsMessage& msg) override;
 
     // IChannel required callbacks/state accessors
     void set_rx_callback(RxCallback cb) override { rx_cb_ = std::move(cb); }

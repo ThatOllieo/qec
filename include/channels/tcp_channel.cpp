@@ -44,8 +44,13 @@ void TcpChannel::stop() {
     set_state(ChannelState::Stopped);
 }
 
-void TcpChannel::send(const CommsMessage& msg) {
+bool TcpChannel::send(const CommsMessage& msg) {
+    if (state_.load(std::memory_order_relaxed) != ChannelState::Running) {
+        std::cerr << "[TcpChannel] send() called on non-running channel, dropping\n";
+        return false;
+    }
     tx_frames_.push(serialize(msg));
+    return true;
 }
 
 bool TcpChannel::connect_once() {
@@ -90,78 +95,90 @@ bool TcpChannel::read_exact(uint8_t* data, size_t n) {
     size_t got = 0;
     while (got < n) {
         ssize_t r = ::recv(sock_, data + got, n - got, 0);
-        if (r <= 0) return false; // peer closed or error
+        if (r == 0) {
+            std::cerr << "[TcpChannel] peer closed connection\n";
+            return false;
+        }
+        if (r < 0) {
+            std::perror("[TcpChannel] recv error");
+            return false;
+        }
         got += size_t(r);
     }
     return true;
 }
 
 void TcpChannel::tx_loop() {
-    while (running_) {
-        auto frame = tx_frames_.pop(); // blocks
-        if (!running_) break;
-        if (frame.empty()) continue;   // nudge frame
+    try {
+        while (running_) {
+            auto frame = tx_frames_.pop();
+            if (!running_) break;
+            if (frame.empty()) continue; // nudge
 
-        if (!write_all(frame.data(), frame.size())) {
-            std::cerr << "[TcpChannel] send failed, closing socket\n";
-            set_state(ChannelState::Failed);
-            close_sock();
-            break;
+            if (!write_all(frame.data(), frame.size())) {
+                std::cerr << "[TcpChannel] send failed, marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                close_sock();
+                break;
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "[TcpChannel] tx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[TcpChannel] tx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 
 void TcpChannel::rx_loop() {
-    while (running_) {
-        uint8_t lenbuf[2];
-        if (!read_exact(lenbuf, 2)) {
-            std::cerr << "[TcpChannel] peer closed or read error on LEN\n";
-            set_state(ChannelState::Failed);
-            break;
-        }
-        uint16_t body_len = get16(lenbuf);
+    try {
+        while (running_) {
+            uint8_t lenbuf[2];
+            if (!read_exact(lenbuf, 2)) {
+                if (running_) {
+                    std::cerr << "[TcpChannel] read error on LEN, marking channel Failed\n";
+                    set_state(ChannelState::Failed);
+                }
+                break;
+            }
+            uint16_t body_len = get16(lenbuf);
 
-        // Debug: print raw LEN bytes and interpreted value
-        std::cerr << "[TcpChannel] LEN bytes: 0x"
-                  << std::hex << int(lenbuf[0]) << " 0x" << int(lenbuf[1])
-                  << "  (little-endian body_len=" << std::dec << body_len << ")\n";
+            if (body_len < 5) {
+                std::cerr << "[TcpChannel] invalid frame length " << body_len << ", marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                break;
+            }
+            if (body_len > 65535 - 2) {
+                std::cerr << "[TcpChannel] absurd frame length " << body_len << ", marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                break;
+            }
 
-        if (body_len < 5) { // must be at least TYPE(1)+CID(2)+SRC(1)+DST(1)
-            std::cerr << "[TcpChannel] invalid length (<6)\n";
-            set_state(ChannelState::Failed);
-            break;
-        }
-        if (body_len > 65535 - 2) {
-            std::cerr << "[TcpChannel] absurd length, dropping\n";
-            set_state(ChannelState::Failed);
-            break;
-        }
+            std::vector<uint8_t> body(body_len);
+            if (!read_exact(body.data(), body.size())) {
+                std::cerr << "[TcpChannel] short read on body (" << body_len << " bytes), marking channel Failed\n";
+                set_state(ChannelState::Failed);
+                break;
+            }
 
-        std::vector<uint8_t> body(body_len);
-        if (!read_exact(body.data(), body.size())) {
-            std::cerr << "[TcpChannel] short read on body (" << body_len << ")\n";
-            set_state(ChannelState::Failed);
-            break;
-        }
+            std::vector<uint8_t> f; f.reserve(2 + body.size());
+            f.push_back(lenbuf[0]); f.push_back(lenbuf[1]);
+            f.insert(f.end(), body.begin(), body.end());
 
-        // Optional: show first few body bytes
-        if (!body.empty()) {
-            std::cerr << "[TcpChannel] Body[0..min]:";
-            for (size_t i = 0; i < std::min<size_t>(body.size(), 8); ++i)
-                std::cerr << " " << std::hex << int(body[i]);
-            std::cerr << std::dec << "\n";
+            CommsMessage m{};
+            if (parse(f, m)) {
+                if (on_receive_) on_receive_(m);
+            } else {
+                std::cerr << "[TcpChannel] parse failed, dropping frame (size=" << f.size() << ")\n";
+            }
         }
-
-        std::vector<uint8_t> f; f.reserve(2 + body.size());
-        f.push_back(lenbuf[0]); f.push_back(lenbuf[1]);
-        f.insert(f.end(), body.begin(), body.end());
-
-        CommsMessage m{};
-        if (parse(f, m)) {
-            if (on_receive_) on_receive_(m);
-        } else {
-            std::cerr << "[TcpChannel] parse failed, dropping frame (size=" << f.size() << ")\n";
-        }
+    } catch (const std::exception& e) {
+        std::cerr << "[TcpChannel] rx_loop exception: " << e.what() << "\n";
+        set_state(ChannelState::Failed);
+    } catch (...) {
+        std::cerr << "[TcpChannel] rx_loop unknown exception\n";
+        set_state(ChannelState::Failed);
     }
 }
 
