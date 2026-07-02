@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -39,10 +40,10 @@ public:
     CameraModule(const CameraModule&) = delete;
     CameraModule& operator=(const CameraModule&) = delete;
 
-    ModuleState state() {return state_;};
+    ModuleState state() {return state_.load();};
 
 private:
-    ModuleState state_ = ModuleState::Stopped;
+    std::atomic<ModuleState> state_{ModuleState::Stopped};
     struct Impl;
     Impl* d_;  // pImpl to keep libcamera out of main
 };

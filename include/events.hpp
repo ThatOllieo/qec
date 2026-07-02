@@ -19,16 +19,23 @@ enum class EventType {
     CommandAcked,
     CommandFailed,
     ModuleFailed,
+    HeartbeatTick,
 };
 
 //=========== PAYLOAD TYPES ===========
 struct EvPhotoTaken {
     std::string path;      // e.g., "/data/imgs/pic_001.jpg"
+    bool ok = true;
+    std::string error;
 };
 
 struct EvMotionCaptured {
     std::string path;
+    bool ok = true;
+    std::string error;
 };
+
+struct EvHeartbeatTick {};
 
 struct EvDeploymentTriggered {
     char key;              // which key was pressed, for debug (e.g., 'd') depreciated, just fill with d for deploy
@@ -67,7 +74,8 @@ using EventPayload = std::variant<
     EvTelemetryFailed,
     EvCommandAcked,
     EvCommandFailed,
-    EvModuleFailed
+    EvModuleFailed,
+    EvHeartbeatTick
 >;
 
 //========= EVENT STRUCTURE =======

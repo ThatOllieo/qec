@@ -1,7 +1,9 @@
 #include "../include/imu.hpp"
+#include "../include/logger.hpp"
 
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #include <chrono>
 #include <thread>
 #include <stdexcept>
@@ -16,6 +18,8 @@
 #include <mutex>
 #include <sstream>
 #include <ctime>
+
+static constexpr const char* kImuCaptureDir = "/home/pi/imuCaptures";
 
 //I2C path and sensor address
 #define I2C_BUS "/dev/i2c-1"
@@ -115,20 +119,26 @@ void IMU::start() {
             try {
                 loop();
             } catch (const IMUError& ex) {
-                if (ex.severity() == ErrorSeverity::Fatal) { std::cerr << "[FATAL]"; }
-                else if (ex.severity() == ErrorSeverity::Recoverable) { std::cerr << "[ERROR]"; }
-                else { std::cerr << "[WARN]"; }
-                std::cerr << "[IMU] Worker thread failed: " << ex.what() << "\n";
+                logLine(ex.severity(), "IMU", std::string("Worker thread failed: ") + ex.what());
                 setFailedState(ex.what());
                 cleanupHardware();
+                Event e; e.type = EventType::ModuleFailed;
+                e.data = EvModuleFailed{"imu_worker", ex.what(), ex.severity()};
+                q_.push(std::move(e));
             } catch (const std::exception& ex) {
-                std::cerr << "[ERROR][IMU] Worker thread failed with std::exception: " << ex.what() << "\n";
+                logLine(ErrorSeverity::Recoverable, "IMU", std::string("Worker thread failed with std::exception: ") + ex.what());
                 setFailedState(ex.what());
                 cleanupHardware();
+                Event e; e.type = EventType::ModuleFailed;
+                e.data = EvModuleFailed{"imu_worker", ex.what(), ErrorSeverity::Recoverable};
+                q_.push(std::move(e));
             } catch (...) {
-                std::cerr << "[ERROR][IMU] Worker thread failed with unknown exception\n";
+                logLine(ErrorSeverity::Recoverable, "IMU", "Worker thread failed with unknown exception");
                 setFailedState("Unknown IMU worker failure");
                 cleanupHardware();
+                Event e; e.type = EventType::ModuleFailed;
+                e.data = EvModuleFailed{"imu_worker", "unknown exception", ErrorSeverity::Recoverable};
+                q_.push(std::move(e));
             }
         });
     } catch (const std::exception& ex) {
@@ -308,7 +318,7 @@ void IMU::triggerCapture(int milliseconds){
     }
 }
 
-void IMU::dumpCaptureToCsvLocked(const std::string& path,
+bool IMU::dumpCaptureToCsvLocked(const std::string& path,
                                 const std::chrono::steady_clock::time_point& start,
                                 const std::chrono::steady_clock::time_point& end,
                                 const std::chrono::steady_clock::time_point& ref)
@@ -317,8 +327,8 @@ void IMU::dumpCaptureToCsvLocked(const std::string& path,
 
     std::ofstream out(path);
     if (!out.is_open()) {
-        std::cerr << "Failed to open capture file: " << path << "\n";
-        return;
+        logLine(ErrorSeverity::Recoverable, "IMU", "Failed to open capture file: " + path);
+        return false;
     }
 
     // CSV header
@@ -349,9 +359,27 @@ void IMU::dumpCaptureToCsvLocked(const std::string& path,
     }
 
     out.close();
+    if (out.fail()) {
+        logLine(ErrorSeverity::Recoverable, "IMU", "Write error while writing capture file: " + path);
+        return false;
+    }
+    return true;
 }
 
 void IMU::startupTasks() {
+    try {
+        std::filesystem::create_directories(kImuCaptureDir);
+    } catch (const std::exception& ex) {
+        throw IMUError(
+            ErrorCode::IOError,
+            ErrorSeverity::Recoverable,
+            "Failed to create/access IMU capture directory",
+            "IMU::startupTasks",
+            {{"path", kImuCaptureDir}},
+            ex.what()
+        );
+    }
+
     fd_ = open(I2C_BUS, O_RDWR);
     if (fd_ < 0) {
         throw IMUError(
@@ -414,6 +442,7 @@ void IMU::loop() {
         std::chrono::steady_clock::time_point dump_end;
         std::chrono::steady_clock::time_point dump_ref;
         std::string dump_path;
+        bool dump_ok = false;
 
         {
             std::lock_guard<std::mutex> lk(mtx_);
@@ -434,23 +463,29 @@ void IMU::loop() {
                 dump_ref   = capture_ref_;
 
                 std::ostringstream oss;
-                oss << "/home/pi/imuCaptures/imu_capture_" << capture_index_++ << ".csv";
+                oss << kImuCaptureDir << "/imu_capture_" << capture_index_++ << ".csv";
                 dump_path = oss.str();
 
                 capture_active_ = false;
                 should_dump = true;
+
+                // Dump while still holding mtx_ - loop() is the sole writer of
+                // buffer_, so this just avoids an unnecessary unlock/relock pair.
+                dump_ok = dumpCaptureToCsvLocked(dump_path, dump_start, dump_end, dump_ref);
             }
         }
 
         if (should_dump) {
-            std::lock_guard<std::mutex> lk(mtx_);
-            dumpCaptureToCsvLocked(dump_path, dump_start, dump_end, dump_ref);
-            std::cout << "Wrote IMU capture to " << dump_path << "\n";
+            if (dump_ok) {
+                std::cout << "[IMU] Wrote IMU capture to " << dump_path << "\n";
+            }
 
-            Event ev{
-                EventType::MotionCaptured,
-                EvMotionCaptured{dump_path},
-                0
+            Event ev;
+            ev.type = EventType::MotionCaptured;
+            ev.data = EvMotionCaptured{
+                dump_path,
+                dump_ok,
+                dump_ok ? std::string{} : std::string("failed to write capture file")
             };
             q_.push(std::move(ev));
         }

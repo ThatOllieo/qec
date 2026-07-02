@@ -256,7 +256,15 @@ void CommsManager::enable_autoreconnect(ChannelId id, bool on) {
     if (rebooter && rebooter->joinable()) rebooter->join();
 }
 
-//used to track the state of the channels, available states are Stopped, Starting, Running, Failed 
+//read the current state of a registered channel (Stopped if not registered)
+ChannelState CommsManager::channel_state(ChannelId id) const {
+    std::lock_guard<std::mutex> lk(chans_mx_);
+    auto it = chans_.find(id);
+    if (it == chans_.end()) return ChannelState::Stopped;
+    return it->second.state.load(std::memory_order_relaxed);
+}
+
+//used to track the state of the channels, available states are Stopped, Starting, Running, Failed
 void CommsManager::on_channel_state(ChannelId id, ChannelState st) {
     std::lock_guard<std::mutex> lk(chans_mx_);
     auto it = chans_.find(id);

@@ -119,7 +119,7 @@ private:
     mutable std::mutex error_mtx_;
     std::string last_error_;
 
-    void dumpCaptureToCsvLocked(const std::string& path,
+    bool dumpCaptureToCsvLocked(const std::string& path,
                                const std::chrono::steady_clock::time_point& start,
                                const std::chrono::steady_clock::time_point& end,
                                const std::chrono::steady_clock::time_point& ref);
