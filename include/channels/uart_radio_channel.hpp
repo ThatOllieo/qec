@@ -59,7 +59,7 @@ public:
     void         set_rx_callback(RxCallback cb)     override { rx_cb_ = std::move(cb); }
     ChannelState state()                      const override { return state_.load(std::memory_order_relaxed); }
     void         set_state_callback(StateCallback cb) override { state_cb_ = std::move(cb); }
-    ChannelId    id()                         const override { return ChannelId::Radio; }
+    ChannelId    id()                         const override { return ChannelId::Uart; }
 
 private:
     void set_state(ChannelState s) {

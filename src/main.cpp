@@ -11,6 +11,7 @@
 #include "../include/comms_manager.hpp"
 #include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
+#include "../include/channels/uart_radio_channel.hpp"
 #include "utils.hpp"
 
 #include "../include/exceptions.hpp"
@@ -444,6 +445,29 @@ int run() {
         std::cerr << "[FATAL][COMMS] Failed to setup and register RADIO channel with unknown exception\n";
         return 1;
     }
+
+    try{
+        UartRadioConfig urcfg;
+        urcfg.device = "/dev/ttyS0";
+        urcfg.baud = 115200;
+        auto uart_radio = std::make_unique<UartRadioChannel>(urcfg);
+        comms.register_channel(std::move(uart_radio));
+    }
+    catch (const CommsError& ex) {
+        logStartupFailure("COMMS", "Failed to setup and register UART RADIO channel", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register UART RADIO channel with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register UART RADIO channel with unknown exception\n";
+        return 1;
+    }
+
+
+
 
     try {
         comms.start();

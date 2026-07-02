@@ -153,7 +153,22 @@ void CommsManager::outbound_loop() {
         try {
             CommsMessage out = outbound_.pop();
             if (!running_) break;
-            ChannelId via = (out.channel_hint == ChannelId::Auto) ? ChannelId::Wifi : out.channel_hint;
+
+            ChannelId via = out.channel_hint;
+            if (via == ChannelId::Auto){
+                std::lock_guard<std::mutex> lk(chans_mx_);
+                auto running = [&](ChannelId cid) {
+                    auto it = chans_.find(cid);
+                    return it != chans_.end() && it->second.state.load(std::memory_order_relaxed) == ChannelState::Running;
+                };
+                if      (running(ChannelId::Uart))  via = ChannelId::Uart;
+                else if (running(ChannelId::Radio))  via = ChannelId::Radio;
+                else if (running(ChannelId::Wifi))   via = ChannelId::Wifi;
+                else {
+                    std::cerr << "[WARN][COMMS] No running channel available for message, dropping\n";
+                    continue;
+                }
+            }
 
             IChannel* ch = nullptr;
             {
