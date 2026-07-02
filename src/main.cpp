@@ -1,67 +1,29 @@
+// Ground station entry point: interactive/service console + WebSocket bridge
+// over CommsManager (UDP + Radio channels talking to the satellite OBC).
+
 #include <iostream>
-#include <variant>
 #include <thread>
 #include <unordered_map>
 #include <functional>
-#include "camera_service.hpp"
+#include <vector>
+#include <string>
+#include <cctype>
+#include <atomic>
+#include <mutex>
+#include <chrono>
+
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+
 #include "../include/tsqueue.hpp"
 #include "../include/events.hpp"
-#include "../include/deployment_watcher.hpp"
-#include "../include/imu.hpp"
 #include "../include/comms_manager.hpp"
-#include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
-#include "../include/channels/uart_radio_channel.hpp"
-#include "utils.hpp"
+#include "../include/channels/udp_channel.hpp"
+#include "../include/ws_link.hpp"
 
 #include "../include/exceptions.hpp"
-#include "../include/module_states.hpp"
 #include "../include/logger.hpp"
-
-#include <fstream>
-#include <string>
-#include <sys/wait.h>
-
-//Quick demo function to get the temperature of the cm5's cpu
-float getCPUTemperature() {
-    std::ifstream file("/sys/class/thermal/thermal_zone0/temp");
-    if (!file.is_open()) {
-        throw QecException(
-            ErrorCode::IOError,
-            ErrorSeverity::Recoverable,
-            "Unable to open CPU temperature file",
-            "getCPUTemperature",
-            {{"path","/sys/class/thermal/thermal_zone0/temp"}}
-        );
-    }
-
-    std::string tempStr;
-    if(!std::getline(file, tempStr)){
-        throw QecException(
-            ErrorCode::IOError,
-            ErrorSeverity::Recoverable,
-            "Failed to read CPU temperature file",
-            "getCPUTemperature",
-            {{"path","/sys/class/thermal/thermal_zone0/temp"}}
-        );
-    }
-    file.close();
-
-    // Convert the temperature to degrees Celsius
-    try{
-        return std::stof(tempStr) / 1000.0f;
-    }
-    catch(const std::exception& ex){
-        throw QecException(
-            ErrorCode::ProtocolError,
-            ErrorSeverity::Recoverable,
-            "CPU temperature file contained invalid data",
-            "getCPUTemperature",
-            {{"raw_value",tempStr}},
-            ex.what()
-        );
-    }
-}
 
 // --- Logging/Helper functions ---
 static void logStartupFailure(const char* module, const char* action, const QecException& ex) {
@@ -71,339 +33,161 @@ static void logStartupFailure(const char* module, const char* action, const QecE
               << ex.what() << '\n';
 }
 
-// Run an scp shell-out once, returning true only if the process actually exited 0.
-static bool runScpOnce(const std::string& cmd) {
-    int status = system(cmd.c_str());
-    if (status == -1) return false;
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+static uint16_t parse_u16(const std::string &s) {
+    if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0)
+        return static_cast<uint16_t>(std::stoul(s, nullptr, 16));
+    return static_cast<uint16_t>(std::stoul(s, nullptr, 10));
+}
+static uint8_t parse_u8(const std::string &s) {
+    return static_cast<uint8_t>(parse_u16(s));
 }
 
-// Light reliability fix: one retry after a short backoff before giving up.
-static bool runScpWithRetry(const std::string& cmd) {
-    if (runScpOnce(cmd)) return true;
-    logLine(ErrorSeverity::Warning, "MAIN", "scp failed, retrying once: " + cmd);
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
-    return runScpOnce(cmd);
+static std::unordered_map<uint16_t, std::function<void(const std::vector<uint8_t>&)>> telem_plans;
+static std::unordered_map<uint16_t, std::function<void()>>                            cmd_plans;
+static std::mutex plans_mtx;
+
+void cmdLineOut(const std::string &msg, WSLink &wslink) {
+    std::cout << msg << std::endl;
+    json j = {
+        {"type", "console"},
+        {"message", msg}
+    };
+    wslink.broadcast(j.dump());
 }
 
-//function called that gets the data for each sensor id
-static std::vector<uint8_t> gather_telem_bytes(uint16_t sensor_id, DeploymentWatcher& deploy, IMU& imu) {
-    try{
-        switch (sensor_id)
-        {
-        //deploy switch
-        case 0x0001:
-            return {static_cast<uint8_t>(deploy.getState())};
-            break;
-        //cpu temp
-        case 0x0003: {
-            std::vector<uint8_t> pkt;
-            float temp = getCPUTemperature();
-            pkt.reserve(sizeof(float));
-            appendBytes(pkt, temp);
-            return pkt;
-        }
-
-        //imu calibration status
-        case 0x2010: {
-            IMU::CalibrationStatus calibstat = imu.getCalibrationStatus();
-            return {calibstat.sys,calibstat.gyro,calibstat.accel,calibstat.mag}; }
-            break;
-        //imu euler angles
-        case 0x2020: {
-            if (!imu.getCalibrationStatus().fullyCalibrated()) {
-                logLine(ErrorSeverity::Warning, "MAIN", "Serving IMU telemetry (sensor_id=0x2020) while uncalibrated");
+// Returns false if the user requested to quit, true otherwise.
+bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) {
+    // Tokenize
+    std::vector<std::string> tok;
+    {
+        std::string cur;
+        for (char ch : line) {
+            if (std::isspace(static_cast<unsigned char>(ch))) {
+                if (!cur.empty()) { tok.push_back(cur); cur.clear(); }
+            } else {
+                cur.push_back(ch);
             }
-            std::vector<uint8_t> pkt;
-            IMU::EulerAngles eulang = imu.getEulerAngles();
-            pkt.reserve(3 * sizeof(float));
-            appendBytes(pkt, eulang.heading);
-            appendBytes(pkt, eulang.roll);
-            appendBytes(pkt, eulang.pitch);
-            return pkt;
-            break;
         }
-
-        //imu quaternion
-        case 0x2030: {
-            if (!imu.getCalibrationStatus().fullyCalibrated()) {
-                logLine(ErrorSeverity::Warning, "MAIN", "Serving IMU telemetry (sensor_id=0x2030) while uncalibrated");
-            }
-            std::vector<uint8_t> pkt;
-            IMU::Quaternion quat = imu.getQuaternion();
-            pkt.reserve(4 * sizeof(float));
-            appendBytes(pkt, quat.w);
-            appendBytes(pkt, quat.x);
-            appendBytes(pkt, quat.y);
-            appendBytes(pkt, quat.z);
-            return pkt;
-            break;
-        }
-
-        //imu gravity vector
-        case 0x2040: {
-            if (!imu.getCalibrationStatus().fullyCalibrated()) {
-                logLine(ErrorSeverity::Warning, "MAIN", "Serving IMU telemetry (sensor_id=0x2040) while uncalibrated");
-            }
-            std::vector<uint8_t> pkt;
-            IMU::Vector3 grav = imu.getGravity();
-            pkt.reserve(3 * sizeof(float));
-            appendBytes(pkt, grav.x);
-            appendBytes(pkt, grav.y);
-            appendBytes(pkt, grav.z);
-            return pkt;
-            break;
-        }
-
-        //imu linear accel.
-        case 0x2050:{
-            if (!imu.getCalibrationStatus().fullyCalibrated()) {
-                logLine(ErrorSeverity::Warning, "MAIN", "Serving IMU telemetry (sensor_id=0x2050) while uncalibrated");
-            }
-            std::vector<uint8_t> pkt;
-            IMU::Vector3 linacc = imu.getLinearAccel();
-            pkt.reserve(3 * sizeof(float));
-            appendBytes(pkt, linacc.x);
-            appendBytes(pkt, linacc.y);
-            appendBytes(pkt, linacc.z);
-            return pkt;
-            break;
-        }
-
-        //fallback (deadbeef). Just a default, can be used as a detection of no sensor found or just to test the connection is working.
-        default:
-            return { uint8_t(sensor_id & 0xFF), uint8_t(sensor_id >> 8), 0xDE, 0xAD, 0xBE, 0xEF };
-            break;
-        }
+        if (!cur.empty()) tok.push_back(cur);
     }
-    catch(const QecException&){
-        throw;
-    }
-    catch(const std::exception& ex){
-        throw QecException(
-            ErrorCode::IOError,
-            ErrorSeverity::Recoverable,
-            "Failed to gather telemetry bytes",
-            "gather_telem_bytes",
-            {{"sensor_id", std::to_string(sensor_id)}},
-            ex.what()
+    if (tok.empty()) return true;
+
+    std::string cmd = tok[0];
+    for (auto &c : cmd) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (cmd == "quit" || cmd == "exit") {
+        return false;
+    } else if (cmd == "tlm") {
+        if (tok.size() < 3) {
+            cmdLineOut("usage: tlm <dest> <sensor>", wslink);
+            return true;
+        }
+        uint8_t  dest   = parse_u8(tok[1]);
+        uint16_t sensor = parse_u16(tok[2]);
+
+        uint8_t hint = static_cast<uint8_t>(ChannelId::Wifi);
+        if (tok.size() >= 4) {
+            hint = parse_u8(tok[3]);
+        }
+
+        uint16_t corr = comms.request_telem_async(
+            dest,
+            static_cast<ChannelId>(hint),
+            sensor,
+            std::chrono::milliseconds(1000), // timeout
+            2                                 // retries
         );
+        if (!corr) {
+            cmdLineOut("[GS] failed to send telemetry request", wslink);
+            return true;
+        }
+
+        cmdLineOut("[GS] Sent TLM corr=" + std::to_string(corr) +
+                   " dest=" + std::to_string(int(dest)) +
+                   " sensor=" + std::to_string(sensor), wslink);
+
+        {
+            std::lock_guard<std::mutex> lock(plans_mtx);
+            telem_plans[corr] = [corr, &wslink, sensor](const std::vector<uint8_t> &bytes) {
+                cmdLineOut("[GS] TelemetryArrived corr=" + std::to_string(corr) +
+                           " len=" + std::to_string(bytes.size()), wslink);
+                for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
+                std::cout << std::dec << "\n";
+
+                json j = {
+                    {"type", "telemetry"},
+                    {"sensor", sensor},
+                    {"data", bytes}
+                };
+                wslink.broadcast(j.dump());
+            };
+        }
+
+        return true;
+
+    } else if (cmd == "cmd") {
+        if (tok.size() < 3) {
+            cmdLineOut("usage: cmd <dest> <cmdid>", wslink);
+            return true;
+        }
+        uint8_t  dest  = parse_u8(tok[1]);
+        uint16_t cmdid = parse_u16(tok[2]);
+
+        uint8_t hint = static_cast<uint8_t>(ChannelId::Wifi);
+        if (tok.size() >= 4) {
+            hint = parse_u8(tok[3]);
+        }
+
+        uint16_t corr = comms.send_command_async(
+            dest,
+            static_cast<ChannelId>(hint),
+            cmdid,
+            /*args*/{},
+            std::chrono::milliseconds(1000),
+            1
+        );
+        if (!corr) {
+            cmdLineOut("[GS] failed to send command", wslink);
+            return true;
+        }
+        cmdLineOut("[GS] Sent CMD corr=" + std::to_string(corr) +
+                   " dest=" + std::to_string(int(dest)) +
+                   " cmd=" + std::to_string(cmdid), wslink);
+
+        {
+            std::lock_guard<std::mutex> lock(plans_mtx);
+            cmd_plans[corr] = [corr, &wslink]() {
+                cmdLineOut("[GS] CommandAcked corr=" + std::to_string(corr), wslink);
+            };
+        }
+
+        return true;
+
+    } else {
+        cmdLineOut("unknown command: " + cmd, wslink);
+        return true;
     }
 }
 
-//handler for incoming commands
-int handleCommand(const EvCommand& c, CommsManager& comms, CameraModule& cams, IMU& imu,
-                   std::unordered_map<uint16_t, std::function<void()>>& cmd_plans) {
-    try{
-        switch (c.command_id)
-        {
-        //OBC CONTROLS 0x0***
-        //basic, connection test
-        case 0x00:
-            comms.reply_ok_command(c.correlation_id);
-            break;
-        //poweroff
-        case 0x01:
-            comms.reply_ok_command(c.correlation_id);
-            system("sudo poweroff");
-            break;
-        //reboot
-        case 0x02:
-            comms.reply_ok_command(c.correlation_id);
-            system("sudo reboot");
-            break;
-
-        //manual image and imu capture trigger
-        case 0x11:
-            cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
-            imu.triggerCapture(5000);
-            comms.reply_ok_command(c.correlation_id);
-            break;
-
-        //send saved images
-        case 0x12:
-            setTimeout([c, &comms, &cmd_plans]() {
-                bool ok = runScpWithRetry("scp /home/pi/left.jpg /home/pi/right.jpg pi@10.42.0.1:/var/www/juk/media/");
-                if (!ok) {
-                    logLine(ErrorSeverity::Recoverable, "MAIN", "scp failed after retry (cmd 0x12)");
-                    comms.reply_err_command(c.correlation_id);
-                    return;
-                }
-                comms.reply_ok_command(c.correlation_id);
-                // Command request demo (cmd 0x0011, no args)
-                uint16_t corr2 = comms.send_command_async(
-                    /*dest*/0x01,
-                    ChannelId::Wifi,
-                    /*cmd*/0x0013,
-                    /*args*/{},
-                    std::chrono::milliseconds(1000),
-                    1
-                );
-                if (corr2) {
-                    std::cout << "[MAIN] Sent Command corr=" << corr2 << "\n";
-                    cmd_plans[corr2] = [](){
-                        std::cout << "[MAIN] Command acknowledged successfully!\n";
-                    };
-                }
-            }, std::chrono::milliseconds(1));
-            break;
-
-        //COMMS MANAGER CONTROLS 0x1***
-        //restart WiFi channel
-        case 0x1011:
-            setTimeout([c, &comms]() {
-                comms.restart_channel(ChannelId::Wifi);
-                comms.reply_ok_command(c.correlation_id);
-            }, std::chrono::milliseconds(200));
-            break;
-
-        //start WiFi channel
-        case 0x1012:
-            setTimeout([c, &comms]() {
-                if(comms.start_channel(ChannelId::Wifi)){
-                    comms.reply_ok_command(c.correlation_id);
-                }
-                else{
-                    comms.reply_err_command(c.correlation_id);
-                }
-            }, std::chrono::milliseconds(200));
-            break;
-
-        //stop WiFi channel
-        case 0x1013:
-            setTimeout([c, &comms]() {
-                comms.stop_channel(ChannelId::Wifi);
-                comms.reply_ok_command(c.correlation_id);
-            }, std::chrono::milliseconds(200));
-            break;
-
-        //drops unrecognised command.
-        default:
-            comms.reply_err_command(c.correlation_id);
-            std::cout << "[MAIN] unrecognised command" << std::endl;
-            break;
+int run(int argc, char* argv[]) {
+    bool cmdLineMode = true;
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] == std::string("--service")) {
+            cmdLineMode = false;
         }
     }
-    catch(const QecException&){
-        throw;
-    }
-    catch(const std::exception& ex){
-        throw CommsError(
-            ErrorCode::StateError,
-            ErrorSeverity::Recoverable,
-            "Command handling failed",
-            "handleCommand",
-            {
-                {"command_id", std::to_string(c.command_id)},
-                {"correlation_id", std::to_string(c.correlation_id)}
-            },
-            ex.what()
-        );
-    }
 
-    return 0;
-}
-
-
-int run() {
     // create main event list, this is the core part of this software, everything that happens is submitted as an event to this list
     // for the main thread to act upon
     TSQueue<Event> eventList;
 
-    // Pending async plans for tracking replies (when this file makes requests and sends commands)
-    std::unordered_map<uint16_t, std::function<void(const std::vector<uint8_t>&)>> telem_plans;
-    std::unordered_map<uint16_t, std::function<void()>> cmd_plans;
-
-    //camera setup, note that the events list is passed by reference so that events can be added by the camera thread. e.g. ive taken a photo
-    CameraModule cams(eventList);
-
-
-    CameraModuleConfig cfg;
-    cfg.left_index = 0;
-    cfg.right_index = 1;
-    cfg.width = 3840;
-    cfg.height = 2160;
-    cfg.warmup_frames = 16;
-    cfg.jpeg_quality = 85;
-
-    /*
-    CameraModuleConfig cfg;
-    cfg.left_index = 0;
-    cfg.right_index = 1;
-    cfg.width = 1280;
-    cfg.height = 720;
-    cfg.warmup_frames = 16;
-    cfg.jpeg_quality = 50;
-    */
-
-    try {
-        cams.startup(cfg);
-    }
-    catch (const CamsError& ex) {
-        logStartupFailure("CAMS", "Failed to start cameras", ex);
-        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
-    }
-    catch (const std::exception& ex) {
-        std::cerr << "[FATAL][CAMS] Failed to start cameras with std::exception: " << ex.what() << '\n';
-        return 1;
-    }
-    catch (...) {
-        std::cerr << "[FATAL][CAMS] Failed to start cameras with unknown exception\n";
-        return 1;
-    }
-
-    //Deployment switch, configured so that on release of the switch, an event is pushed to the main list
-    DeploymentWatcher deploy(eventList);
-    try {
-        deploy.start();
-    }
-    catch (const DeployWatchError& ex) {
-        logStartupFailure("DEPLOY", "Failed to start deployment watcher", ex);
-        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
-    }
-    catch (const std::exception& ex) {
-        std::cerr << "[FATAL][DEPLOY] Failed to start deployment watcher with std::exception: " << ex.what() << '\n';
-        return 1;
-    }
-    catch (...) {
-        std::cerr << "[FATAL][DEPLOY] Failed to start deployment watcher with unknown exception\n";
-        return 1;
-    }
-
-    //Imu is started, required for the IMU telemetry requests or other onboard use
-    IMU imu(eventList);
-    try {
-        imu.start();
-    }
-    catch (const IMUError& ex) {
-        logStartupFailure("IMU", "Failed to start IMU", ex);
-        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
-    }
-    catch (const std::exception& ex) {
-        std::cerr << "[FATAL][IMU] Failed to start IMU with std::exception: " << ex.what() << '\n';
-        return 1;
-    }
-    catch (...) {
-        std::cerr << "[FATAL][IMU] Failed to start IMU with unknown exception\n";
-        return 1;
-    }
-
-    //Comms manager is what handles all off board communications, incoming messages become events in the main list, and main thread can
-    // simply call functions to request data or send commands elsewhere.
     CommsManager comms(eventList);
-    const uint8_t sat_src = 0xD1; // this device's identifier, reused below for the heartbeat broadcast
-    comms.set_src(sat_src);
-
-    //TcpConfig tcpcfg;
-    //tcpcfg.host = "10.42.0.1";
-    //tcpcfg.port = 5000;
-    //auto tcp = std::make_unique<TcpChannel>(tcpcfg);
-    //comms.register_channel(std::move(tcp));
+    comms.set_src(0x01);
 
     try {
         UdpConfig udpcfg;
-        //auto udp = std::make_unique<UdpChannel>(udpcfg);
-        //comms.register_channel(std::move(udp));
+        auto udp = std::make_unique<UdpChannel>(udpcfg);
+        comms.register_channel(std::move(udp));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register UDP channel", ex);
@@ -420,7 +204,7 @@ int run() {
 
     try {
         RadioConfig rcfg;
-        rcfg.freq_hz = 434'000'000;
+        rcfg.freq_hz   = 434'000'000;
         rcfg.pa_high   = true;
         rcfg.power_dbm = 17;
         rcfg.rx_bw_khz = 100.0;
@@ -430,8 +214,8 @@ int run() {
         rcfg.pin_dio0  = 25;
         rcfg.spidev    = "/dev/spidev0.1";
 
-        //auto radio = std::make_unique<RadioChannel>(rcfg);
-        //comms.register_channel(std::move(radio));
+        auto radio = std::make_unique<RadioChannel>(rcfg);
+        comms.register_channel(std::move(radio));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register RADIO channel", ex);
@@ -446,31 +230,11 @@ int run() {
         return 1;
     }
 
-    try{
-        UartRadioConfig urcfg;
-        urcfg.device = "/dev/ttyAMA3";
-        urcfg.baud = 115200;
-        auto uart_radio = std::make_unique<UartRadioChannel>(urcfg);
-        comms.register_channel(std::move(uart_radio));
-    }
-    catch (const CommsError& ex) {
-        logStartupFailure("COMMS", "Failed to setup and register UART RADIO channel", ex);
-        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
-    }
-    catch (const std::exception& ex) {
-        std::cerr << "[FATAL][COMMS] Failed to setup and register UART RADIO channel with std::exception: " << ex.what() << '\n';
-        return 1;
-    }
-    catch (...) {
-        std::cerr << "[FATAL][COMMS] Failed to setup and register UART RADIO channel with unknown exception\n";
-        return 1;
-    }
-
-
-
-
     try {
-        comms.start();
+        if (!comms.start()) {
+            std::cerr << "[FATAL][COMMS] Comms start failed\n";
+            return 1;
+        }
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to start comms manager", ex);
@@ -485,291 +249,231 @@ int run() {
         return 1;
     }
 
-    // Periodic health heartbeat: sleeps and posts a synthetic event into the main
-    // queue, so the actual broadcast send stays on the main thread like everything else.
-    // Wrapped so a single failure never kills the thread.
-    std::thread([&eventList]() {
-        for (;;) {
+    WSLink wslink(eventList);
+    try {
+        wslink.start(9002);
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][WS] Failed to start WebSocket link: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][WS] Failed to start WebSocket link with unknown exception\n";
+        return 1;
+    }
+
+    std::atomic<bool> running{true};
+
+    // Periodic telemetry poll of the satellite's default sensors. Wrapped so a
+    // single failure never kills the thread — mirrors the OBC heartbeat pattern.
+    constexpr uint16_t toPoll[] = {0x0003, 0x0001};
+    std::thread polling([&]{
+        while (running) {
             try {
-                std::this_thread::sleep_for(std::chrono::seconds(30));
-                Event e; e.type = EventType::HeartbeatTick; e.data = EvHeartbeatTick{};
-                eventList.push(std::move(e));
-            } catch (const std::exception& ex) {
-                logLine(ErrorSeverity::Recoverable, "HEARTBEAT", std::string("heartbeat thread error: ") + ex.what());
-            } catch (...) {
-                logLine(ErrorSeverity::Recoverable, "HEARTBEAT", "heartbeat thread unknown error");
-            }
-        }
-    }).detach();
-
-    const auto process_start = std::chrono::steady_clock::now();
-
-
-    // --- DEMO outbound requests: fire once on startup ---
-    /*
-    {
-        // Telemetry request demo (sensor 7)
-        uint16_t corr = comms.request_telem_async(
-            0x01,
-            ChannelId::Wifi,
-            7,
-            std::chrono::milliseconds(1000),
-            2
-        );
-        if (corr) {
-            std::cout << "[MAIN] Sent TelemetryRequest corr=" << corr << "\n";
-            telem_plans[corr] = [](const std::vector<uint8_t>& bytes) {
-                std::cout << "[MAIN] Got " << bytes.size() << " telemetry bytes: ";
-                for (auto b : bytes) std::cout << std::hex << int(b) << ' ';
-                std::cout << std::dec << "\n";
-            };
-        }
-    }
-    */
-
-    uint64_t seq = 1; //counter, used for logging
-    for (;;) {
-        Event e = eventList.pop(); // blocks until an event arrives
-        e.seq = seq++;
-
-        try{
-            switch (e.type) {
-                //on satellite deployment switch trigger, cameras are told to take photos
-                case EventType::DeploymentTriggered: {
-                    const auto& d = std::get<EvDeploymentTriggered>(e.data);
-                    std::cout << "[MAIN] DEPLOY" << std::endl;
-
-                    CommsMessage msg;
-                    msg.src = sat_src;
-                    msg.dest = 0x01;
-                    msg.type = MessageType::I_TLM_PT;
-                    msg.correlation_id = 0;
-                    msg.channel_hint = ChannelId::Auto;
-                    msg.payload = {'D','E','P','L','O','Y'};
-                    comms.send(msg);
-
-                    if(cams.state() == ModuleState::Running){
-                        try{
-                            cams.take_both("/home/pi/left.jpg","/home/pi/right.jpg", 42);
-                        }
-                        catch (const CamsError& ex) {
-                            std::cerr << severityTag(ex.severity()) << "[CAMS] " << ex.what() << '\n';
-                        }
-                    }
-
-                    imu.triggerCapture(5000);
-                    break;
-                }
-
-                case EventType::MotionCaptured:{
-                    const auto& m = std::get<EvMotionCaptured>(e.data);
-
-                    if (!m.ok) {
-                        logLine(ErrorSeverity::Warning, "MAIN", "Skipping SCP - IMU capture failed: " + m.error);
-                        break;
-                    }
-
-                    std::string path = m.path;
-                    setTimeout([path, &comms, &cmd_plans](){
-                        std::cout << "[MAIN] Got mocap event, for path " << path << std::endl;
-                        bool ok = runScpWithRetry(std::string("scp ") + path + " pi@10.42.0.1:/var/www/juk/startup.csv");
-                        if (!ok) {
-                            logLine(ErrorSeverity::Recoverable, "MAIN", "scp failed after retry (MotionCaptured)");
-                            return;
-                        }
-
-                        uint16_t corr2 = comms.send_command_async(
-                            /*dest*/0x01,
-                            ChannelId::Wifi,
-                            /*cmd*/0x0014,
-                            /*args*/{},
-                            std::chrono::milliseconds(1000),
-                            1
-                        );
-                        if (corr2) {
-                            std::cout << "[MAIN] Sent Command corr=" << corr2 << "\n";
-                            cmd_plans[corr2] = [](){
-                                std::cout << "[MAIN] Command acknowledged successfully!\n";
-                            };
-                        }
-
-                    }, std::chrono::milliseconds(1));
-                    break;
-                }
-
-                //on photo taken, these are automatically sent to the groundstation address
-                case EventType::PhotoTaken: {
-                    const auto& p = std::get<EvPhotoTaken>(e.data);
-                    std::cout << "[MAIN] (seq " << e.seq << ") PhotoTaken: " << p.path << " ok=" << p.ok << "\n";
-
-                    if (!p.ok) {
-                        logLine(ErrorSeverity::Warning, "MAIN", "Skipping SCP - photo capture failed: " + p.error);
-                        break;
-                    }
-
-                    setTimeout([p, &comms, &cmd_plans]() {
-                        std::cout << "[MAIN] triggering scp send\n";
-                        bool ok = runScpWithRetry("scp /home/pi/left.jpg /home/pi/right.jpg pi@10.42.0.1:/var/www/juk/media/");
-                        if (!ok) {
-                            logLine(ErrorSeverity::Recoverable, "MAIN", "scp failed after retry (PhotoTaken)");
-                            return;
-                        }
-                        // Command request demo (cmd 0x0011, no args)
-                        uint16_t corr2 = comms.send_command_async(
-                            /*dest*/0x01,
-                            ChannelId::Wifi,
-                            /*cmd*/0x0013,
-                            /*args*/{},
-                            std::chrono::milliseconds(1000),
-                            1
-                        );
-                        if (corr2) {
-                            std::cout << "[MAIN] Sent Command corr=" << corr2 << "\n";
-                            cmd_plans[corr2] = [](){
-                                std::cout << "[MAIN] Command acknowledged successfully!\n";
-                            };
-                        }
-                    }, std::chrono::milliseconds(1));
-
-                    break;
-                }
-                // on command recieve, handle
-                case EventType::Command: {
-                    auto& c = std::get<EvCommand>(e.data);
-                    std::cout << "[MAIN] Cmd CorrId: " << c.correlation_id << std::endl;
-                    handleCommand(c, comms, cams, imu, cmd_plans);
-                    break;
-
-                }
-                //on telemetry request, get telem for specifed sensor, reply
-                case EventType::TelemetryRequest: {
-                    auto& t = std::get<EvTelemetryRequest>(e.data);
-                    std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << " sensorid: " << t.sensor_id << std::endl;
-                    auto bytes = gather_telem_bytes(t.sensor_id,deploy,imu);
-                    comms.reply_telem(t.correlation_id, bytes);
-                    break;
-                }
-
-                //if telemtry is recieved (and its something we've requested, do *something*)
-                case EventType::TelemetryArrived: {
-                    auto& a = std::get<EvTelemetryArrived>(e.data);
-                    if (auto it = telem_plans.find(a.correlation_id); it != telem_plans.end()) {
-                        it->second(a.bytes);
-                        telem_plans.erase(it);
-                    }
-                    break;
-                }
-                // telemtry request timeout or got an error
-                case EventType::TelemetryFailed: {
-                    auto& f = std::get<EvTelemetryFailed>(e.data);
-                    std::cout << "[MAIN] telem timeout corr=" << f.correlation_id << "\n";
-                    telem_plans.erase(f.correlation_id);
-                    break;
-                }
-                // command has been acknowledged
-                case EventType::CommandAcked: {
-                    auto& c2 = std::get<EvCommandAcked>(e.data);
-                    if (auto it = cmd_plans.find(c2.correlation_id); it != cmd_plans.end()) {
-                        it->second();
-                        cmd_plans.erase(it);
-                    }
-                    break;
-                }
-                // command failed or errored
-                case EventType::CommandFailed: {
-                    auto& c2 = std::get<EvCommandFailed>(e.data);
-                    std::cout << "[MAIN] cmd timeout corr=" << c2.correlation_id << "\n";
-                    cmd_plans.erase(c2.correlation_id);
-                    break;
-                }
-                // background worker or channel reported a structural failure
-                case EventType::ModuleFailed: {
-                    const auto& mf = std::get<EvModuleFailed>(e.data);
-                    logLine(mf.severity, "MAIN", "module='" + mf.module + "' reason='" + mf.reason + "'");
-                    break;
-                }
-                // periodic health broadcast
-                case EventType::HeartbeatTick: {
-                    std::vector<uint8_t> payload;
-
-                    float temp = -1.0f;
-                    try { temp = getCPUTemperature(); }
-                    catch (const std::exception& ex) {
-                        logLine(ErrorSeverity::Warning, "MAIN", std::string("heartbeat: temp read failed: ") + ex.what());
-                    }
-                    appendBytes(payload, temp);
-
-                    payload.push_back(static_cast<uint8_t>(cams.state()));
-                    payload.push_back(static_cast<uint8_t>(imu.state()));
-                    payload.push_back(static_cast<uint8_t>(deploy.getState()));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Wifi)));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Radio)));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Uart)));
-
-                    uint32_t uptime = static_cast<uint32_t>(
-                        std::chrono::duration_cast<std::chrono::seconds>(
-                            std::chrono::steady_clock::now() - process_start
-                        ).count()
+                for (uint16_t x : toPoll) {
+                    uint16_t corr = comms.request_telem_async(
+                        0xEF,
+                        ChannelId::Wifi,
+                        x, // sensor id
+                        std::chrono::milliseconds(1000), // timeout
+                        2                                 // retries
                     );
-                    appendBytes(payload, uptime);
+                    if (!corr) {
+                        cmdLineOut("[GS] failed to send poll telemetry request", wslink);
+                        continue;
+                    }
 
-                    CommsMessage hb;
-                    hb.type = MessageType::I_BRD;
-                    hb.src = sat_src;
-                    hb.dest = 0x01;
-                    hb.correlation_id = 0;
-                    hb.payload = payload;
+                    {
+                        std::lock_guard<std::mutex> lock(plans_mtx);
+                        telem_plans[corr] = [corr, &wslink, x](const std::vector<uint8_t>& bytes) {
+                            cmdLineOut("[GS] Polled TelemetryArrived corr=" + std::to_string(corr) +
+                                       " len=" + std::to_string(bytes.size()), wslink);
 
-                    //hb.channel_hint = ChannelId::Wifi;
-                    //comms.send(hb);
-                    //hb.channel_hint = ChannelId::Radio;
-                    //comms.send(hb);
-                    hb.channel_hint = ChannelId::Uart;
-                    comms.send(hb);
-
-                    break;
+                            json j = {
+                                {"type", "telemetry"},
+                                {"sensor", x},
+                                {"data", bytes}
+                            };
+                            wslink.broadcast(j.dump());
+                        };
+                    }
                 }
-                default: break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+            } catch (const std::exception& ex) {
+                logLine(ErrorSeverity::Recoverable, "POLL", std::string("polling thread error: ") + ex.what());
+            } catch (...) {
+                logLine(ErrorSeverity::Recoverable, "POLL", "polling thread unknown error");
             }
         }
-        catch(const QecException& ex){
-            std::cerr << "[ERROR][MAIN] seq=" << e.seq
-                << " type=" << static_cast<int>(e.type)
-                << " " << ex.what() << '\n';
+    });
+
+    std::thread ev_thread([&]{
+        while (running) {
+            Event e = eventList.pop();
+            try {
+                switch (e.type) {
+                    case EventType::TelemetryArrived: {
+                        auto &a = std::get<EvTelemetryArrived>(e.data);
+
+                        std::function<void(const std::vector<uint8_t>&)> cb;
+                        {
+                            std::lock_guard<std::mutex> lock(plans_mtx);
+                            if (auto it = telem_plans.find(a.correlation_id); it != telem_plans.end()) {
+                                cb = std::move(it->second);
+                                telem_plans.erase(it);
+                            }
+                        }
+                        if (cb) {
+                            cb(a.bytes);
+                        } else {
+                            cmdLineOut("[GS] Untracked TelemetryArrived corr=" + std::to_string(a.correlation_id) +
+                                       " size=" + std::to_string(a.bytes.size()), wslink);
+                        }
+                        break;
+                    }
+                    case EventType::TelemetryFailed: {
+                        auto &f = std::get<EvTelemetryFailed>(e.data);
+                        cmdLineOut("[GS] Telemetry timeout/error corr=" + std::to_string(f.correlation_id), wslink);
+                        {
+                            std::lock_guard<std::mutex> lock(plans_mtx);
+                            telem_plans.erase(f.correlation_id);
+                        }
+                        break;
+                    }
+                    case EventType::CommandAcked: {
+                        auto &c = std::get<EvCommandAcked>(e.data);
+                        std::function<void()> cb;
+                        {
+                            std::lock_guard<std::mutex> lock(plans_mtx);
+                            if (auto it = cmd_plans.find(c.correlation_id); it != cmd_plans.end()) {
+                                cb = std::move(it->second);
+                                cmd_plans.erase(it);
+                            }
+                        }
+                        if (cb) {
+                            cb();
+                        } else {
+                            cmdLineOut("[GS] Untracked CommandAcked corr=" + std::to_string(c.correlation_id), wslink);
+                        }
+                        break;
+                    }
+                    case EventType::CommandFailed: {
+                        auto &c = std::get<EvCommandFailed>(e.data);
+                        cmdLineOut("[GS] Command timeout/error corr=" + std::to_string(c.correlation_id) +
+                                   " reason=" + c.reason, wslink);
+                        {
+                            std::lock_guard<std::mutex> lock(plans_mtx);
+                            cmd_plans.erase(c.correlation_id);
+                        }
+                        break;
+                    }
+                    case EventType::TelemetryRequest: {
+                        auto &t = std::get<EvTelemetryRequest>(e.data);
+                        cmdLineOut("[GS] Inbound TelemetryRequest (sensor=" + std::to_string(t.sensor_id) +
+                                   ", corr=" + std::to_string(t.correlation_id) + ") — ignoring in GS demo", wslink);
+                        break;
+                    }
+                    case EventType::Command: {
+                        auto &c = std::get<EvCommand>(e.data);
+                        cmdLineOut("[GS] Inbound Command (cmd=0x" + std::to_string(c.command_id) +
+                                   ", corr=" + std::to_string(c.correlation_id) + ") — ignoring in GS demo", wslink);
+                        json j = {
+                            {"type", "command"},
+                            {"command_id", c.command_id},
+                        };
+                        wslink.broadcast(j.dump());
+                        break;
+                    }
+                    case EventType::WSMessageReceived: {
+                        auto &wsc = std::get<EvWSMessageReceived>(e.data);
+
+                        json j;
+                        try {
+                            j = json::parse(wsc.jsonText);
+                        } catch (const json::parse_error& pe) {
+                            std::cerr << "JSON parse error: " << pe.what() << "\n";
+                            cmdLineOut("Invalid WS in: JSON parse error", wslink);
+                            break;
+                        }
+
+                        if (!j.contains("type") || !j["type"].is_string()) {
+                            std::cerr << "Invalid WS in: missing or invalid 'type' field\n";
+                            cmdLineOut("Invalid WS in: missing or invalid 'type' field", wslink);
+                            break;
+                        }
+                        std::string type = j["type"];
+                        if (type == "console") {
+                            if (!j.contains("message") || !j["message"].is_string()) {
+                                std::cerr << "Invalid console WS console command: missing or invalid 'message' field\n";
+                                cmdLineOut("Invalid WS console command: missing or invalid 'message' field", wslink);
+                                break;
+                            }
+                            cmdLineParse(comms, wslink, j.at("message").get<std::string>());
+                        }
+
+                        break;
+                    }
+
+                    default:
+                        break;
+                }
+            }
+            catch (const QecException& ex) {
+                logLine(ex.severity(), "GS", std::string("event dispatch error: ") + ex.what());
+            }
+            catch (const std::exception& ex) {
+                logLine(ErrorSeverity::Recoverable, "GS", std::string("event dispatch std::exception: ") + ex.what());
+            }
+            catch (...) {
+                logLine(ErrorSeverity::Recoverable, "GS", "event dispatch unknown exception");
+            }
         }
-        catch(const std::exception& ex){
-            std::cerr << "[ERROR][MAIN] seq=" << e.seq
-                << " type=" << static_cast<int>(e.type)
-                << " std::exception: " << ex.what() << '\n';
+    });
+
+    if (cmdLineMode) {
+        std::cout <<
+            "GS radio console:\n"
+            "  tlm <dest> <sensor>      e.g. tlm 0xEF 0x0003\n"
+            "  cmd <dest> <cmdid>       e.g. cmd 0xEF 0x0011\n"
+            "  quit/exit\n";
+
+        std::string line;
+        while (running && std::cout << "gs> " && std::getline(std::cin, line)) {
+            // Trim
+            while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back()))) line.pop_back();
+            if (line.empty()) continue;
+
+            if (!cmdLineParse(comms, wslink, line)) break;
         }
-        catch(...){
-            std::cerr << "[ERROR][MAIN] seq=" << e.seq
-                << " type=" << static_cast<int>(e.type)
-                << " unknown exception\n";
+    } else {
+        cmdLineOut("[GS] Running in service mode", wslink);
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 
-    // (Unreached)
-    deploy.stop();
-    cams.shutdown();
-    imu.stop();
+    running = false;
     comms.stop();
+    wslink.stop();
+    if (ev_thread.joinable()) ev_thread.join();
+    if (polling.joinable()) polling.join();
+
     return 0;
 }
 
-int main(){
-    try{
-        return run();
+int main(int argc, char* argv[]) {
+    try {
+        return run(argc, argv);
     }
-    catch(const QecException& ex){
+    catch (const QecException& ex) {
         std::cerr << "[FATAL] " << ex.what() << '\n';
         return 1;
     }
-    catch(const std::exception& ex){
+    catch (const std::exception& ex) {
         std::cerr << "[FATAL] std::exception: " << ex.what() << '\n';
         return 1;
     }
-    catch (...){
+    catch (...) {
         std::cerr << "[FATAL] unknown exception\n";
         return 1;
     }
