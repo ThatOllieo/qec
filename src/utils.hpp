@@ -1,7 +1,11 @@
+#pragma once
 #include <thread>
 #include <chrono>
 #include <functional>
 #include <cstring>
+#include <cstdint>
+#include <array>
+#include <vector>
 
 // fire-and-forget timeout helper, made to be like the one you get in javascript
 inline void setTimeout(std::function<void()> fn, std::chrono::milliseconds delay) {

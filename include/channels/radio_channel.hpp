@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <gpiod.h>
 
 struct RadioConfig {
     // SPI device
@@ -38,7 +39,7 @@ public:
 
     bool start() override;
     void stop() override;
-    void send(const CommsMessage& msg) override;
+    bool send(const CommsMessage& msg) override;
 
     // IChannel required callbacks/state accessors
     void set_rx_callback(RxCallback cb) override { rx_cb_ = std::move(cb); }
@@ -82,9 +83,10 @@ private:
 
     // low-level state
     int  spi_fd_ = -1;        // spidev fd
-    void* gpio_chip_ = nullptr; // gpiod_chip*
-    void* gpio_reset_ = nullptr; // gpiod_line*
-    void* gpio_dio0_  = nullptr; // gpiod_line*
+
+    gpiod_chip* gpio_chip_ = nullptr;
+    gpiod_line_request* gpio_reset_ = nullptr;
+    gpiod_line_request* gpio_dio0_ = nullptr;
 
     // IChannel state + callbacks
     std::atomic<ChannelState>  state_{ChannelState::Stopped};

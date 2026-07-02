@@ -24,7 +24,7 @@ public:
     bool start() override;
     void stop() override;
 
-    void send(const CommsMessage& msg) override;   // enqueue and TX thread writes
+    bool send(const CommsMessage& msg) override;   // enqueue and TX thread writes
     void set_rx_callback(RxCallback cb) override { on_receive_ = std::move(cb); }
     ChannelId id() const override { return ChannelId::Wifi; } // still “Wifi” transport
 

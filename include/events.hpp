@@ -4,29 +4,38 @@
 #include <variant>
 #include <vector>
 #include "comms_message.hpp"
+#include "exceptions.hpp"
 
 //============ EVENT TYPES ==========
 enum class EventType {
     PhotoTaken,
-    MotionCaptured,         
-    NeedTelem,          
-    DeploymentTriggered, 
+    MotionCaptured,
+    NeedTelem,
+    DeploymentTriggered,
     Command,
     TelemetryRequest,
     TelemetryArrived,
     TelemetryFailed,
     CommandAcked,
     CommandFailed,
+    ModuleFailed,
+    HeartbeatTick,
 };
 
 //=========== PAYLOAD TYPES ===========
 struct EvPhotoTaken {
     std::string path;      // e.g., "/data/imgs/pic_001.jpg"
+    bool ok = true;
+    std::string error;
 };
 
 struct EvMotionCaptured {
     std::string path;
+    bool ok = true;
+    std::string error;
 };
+
+struct EvHeartbeatTick {};
 
 struct EvDeploymentTriggered {
     char key;              // which key was pressed, for debug (e.g., 'd') depreciated, just fill with d for deploy
@@ -52,18 +61,21 @@ struct EvTelemetryArrived { uint16_t correlation_id; std::vector<uint8_t> bytes;
 struct EvTelemetryFailed { uint16_t correlation_id; std::string reason; };
 struct EvCommandAcked { uint16_t correlation_id; };
 struct EvCommandFailed { uint16_t correlation_id; std::string reason; };
+struct EvModuleFailed { std::string module; std::string reason; ErrorSeverity severity; };
 
 //======= WRAPPER =======
 using EventPayload = std::variant<
-    EvPhotoTaken, 
+    EvPhotoTaken,
     EvMotionCaptured,
-    EvDeploymentTriggered, 
-    EvCommand, 
+    EvDeploymentTriggered,
+    EvCommand,
     EvTelemetryRequest,
     EvTelemetryArrived,
     EvTelemetryFailed,
     EvCommandAcked,
-    EvCommandFailed
+    EvCommandFailed,
+    EvModuleFailed,
+    EvHeartbeatTick
 >;
 
 //========= EVENT STRUCTURE =======
