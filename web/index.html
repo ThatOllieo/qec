@@ -1,0 +1,463 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Jovian UK Dashboard</title>
+<link href="dash.css" rel="stylesheet" type="text/css">
+</head>
+
+<body>
+	<div class="upperTLContainer">
+		<div class="statsContainer">
+			<div class="pageHeaderContainer">
+				<div class="pageHeader" id="pageHeader">
+					<t class="pageHeaderText">Jovian-UK GS</t>
+				</div>
+			</div>
+			<div class="statsContent">
+				<t class="bigText">Battery</t>
+				<t>-</t>
+				<t>&nbsp;</t>
+				<t class="bigText">Temperature</t>
+				<t>CPU: <t id="sensor.3">-</t></t>
+				<t>&nbsp;</t>
+				<t class="bigText">Deployed?</t>
+				<t>State: <t id="sensor.1">-</t></t>
+				<t>&nbsp;</t>
+			</div>
+		</div>
+		<div class="imagesContainer">
+			<!--<img src="https://placehold.co/1920x1080" class="duoImageL">
+			<img src="https://placehold.co/1920x1080" class="duoImageR">-->
+			<img src="media/left.jpg" class="duoImageL" id="imgLeft">
+			<img src="media/right.jpg" class="duoImageR" id="imgRight">
+		</div>
+	</div>
+	<div class="lowerTLContainer">
+		<div class="flexPanelContainer">
+			<div class="flexPanelHeaderContainer">
+				<div class="flexPanelHeader" id="graphsButton">
+					<t class="flexPanelHeaderText">IMU Graphs</t>
+				</div>
+				<div class="flexPanelHeaderDW" id="consoleButton">
+					<t class="flexPanelHeaderTextDW">Console</t>
+				</div>
+			</div>
+			<div class="flexPanelContentContainer">
+				<div class="chartContainerFW" id="chartContainer"><canvas id="myChart"></canvas></div>
+				<div class="consoleContainer" id="consoleContainer">
+					<div class="consoleContents">.</div>
+					<div class="consoleBar">
+						<input id="consoleInput" type="text" placeholder="Commands: tlm <satId> <sensorId>, cmd <satId> <cmdId>">
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="fileBrowserContainer">
+			<div class="fileBrowserHeader">
+				<div id="backBtn" class="quickMenuHeader" style="width: fit-content;"><t class="quickMenuHeaderText">← Back</t></div>
+				<div id="title"></div>
+			</div>
+			<div class="fileBrowserContentContainer">
+				<div id="menu" class="quickMenuContent"></div>
+			</div>
+		</div>
+	</div>
+	
+</body>
+<script>
+var flexSelected = "graph"; // or "console
+const graphsButton   = document.getElementById("graphsButton");
+const consoleButton  = document.getElementById("consoleButton");
+const chartContainer = document.getElementById("chartContainer");
+const consoleContainer = document.getElementById("consoleContainer");
+graphsButton.onclick = () => {
+	if(flexSelected != "graph"){
+		flexSelected = "graph";
+		graphsButton.style.backgroundColor = "var(--brighter)";
+		consoleButton.style.backgroundColor = "var(--background)";
+		chartContainer.style.display = "block";
+		consoleContainer.style.display = "none";
+	}
+};
+consoleButton.onclick = () => {
+	if(flexSelected != "console"){
+		flexSelected = "console";
+		consoleButton.style.backgroundColor = "var(--brighter)";
+		graphsButton.style.backgroundColor = "var(--background)";
+		consoleContainer.style.display = "flex";
+		chartContainer.style.display = "none";
+	}
+};
+
+</script>
+<script src="chart.js"></script>
+<script>
+let chart; 
+async function loadCSV(url) {
+  const text = await (await fetch(url, { cache: "no-store" })).text();
+  const lines = text.trim().split("\n");
+  const headers = lines[0].split(",");
+
+  return lines.slice(1).map(line => {
+    const vals = line.split(",");
+    return Object.fromEntries(headers.map((h,i)=>[h.trim(), vals[i].trim()]));
+  });
+}
+
+async function main() {
+  const rows = await loadCSV("startup.csv?ts=" + Date.now());
+
+  // x is ms since deploy (number), y is each column
+  const seriesA = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAx) }));
+  const seriesB = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAy) }));
+  const seriesC = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAz) }));
+
+  chart = new Chart(document.getElementById("myChart"), {
+    type: "line",
+    data: {
+      datasets: [
+        { label: "ax", data: seriesA, borderWidth: 1, tension: 0.2, pointRadius: 0, pointHoverRadius: 4 },
+        { label: "ay", data: seriesB, borderWidth: 1, tension: 0.2, pointRadius: 0, pointHoverRadius: 4 },
+		{ label: "az", data: seriesC, borderWidth: 1, tension: 0.2, pointRadius: 0, pointHoverRadius: 4 },
+      ]
+    },
+    options: {
+      parsing: false, // IMPORTANT for {x,y}
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: true, text: "ms since deploy" },
+		  grid: {
+		    color: "#ffffff"},
+		  ticks: {
+		    color: "#ffffff"},
+		  border: {
+		    color: "#ffffff"}
+        },
+        y: {
+          title: { display: true, text: "value" },
+		  grid: {
+		    color: "#ffffff"},
+		  ticks: {
+		    color: "#ffffff"},
+		  border: {
+		    color: "#ffffff"}
+        }
+      },
+	  responsive: true,
+	  maintainAspectRatio: false
+    }
+  });
+}
+
+function refreshImages() {
+  const left  = document.getElementById("imgLeft");
+  const right = document.getElementById("imgRight");
+  const ts = Date.now();
+
+  if (left)  left.src  = `media/left.jpg?ts=${ts}`;
+  if (right) right.src = `media/right.jpg?ts=${ts}`;
+}
+
+async function refreshGraph() {
+  if (!chart) return;
+
+  const rows = await loadCSV("startup.csv?ts=" + Date.now());
+
+  const seriesA = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAx) }));
+  const seriesB = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAy) }));
+  const seriesC = rows.map(r => ({ x: Number(r.t_ms), y: Number(r.linAz) }));
+
+  chart.data.datasets[0].data = seriesA;
+  chart.data.datasets[1].data = seriesB;
+  chart.data.datasets[2].data = seriesC;
+
+  chart.update(); // no animation; use chart.update() if you want animation
+}
+	
+main();
+</script>
+
+<script>
+let ws = null;
+let wsConnected = false;
+
+// Small integer scales (e.g. calibration status 0-3) print as-is; genuine
+// floats (temp, angles, vectors) get rounded to 2 decimal places.
+function formatNumber(v) {
+	return (typeof v === "number" && !Number.isInteger(v)) ? v.toFixed(2) : v;
+}
+
+// Decoded telemetry from the GS bridge arrives as a plain number (e.g. temp),
+// an object of named fields (e.g. Euler angles), or - for unknown/short
+// payloads - the raw byte array as before. Render each shape sensibly.
+function formatTelemetry(data) {
+	if (Array.isArray(data)) {
+		return data.join(", ");
+	}
+	if (typeof data === "object" && data !== null) {
+		return Object.entries(data)
+			.map(([k, v]) => `${k}: ${formatNumber(v)}`)
+			.join(", ");
+	}
+	if (typeof data === "number") {
+		return formatNumber(data);
+	}
+	return String(data);
+}
+
+const WS_URL = "ws://10.42.0.1:9002";
+function connectWs() {
+	console.log("connecting...");
+	log("connecting...");
+
+	wsConnected = false;
+	ws = new WebSocket(WS_URL);
+
+	ws.onopen = () => {
+		console.log("connected");
+		log("WebSocket connected");
+		wsConnected = true;
+	};
+
+	ws.onclose = () => {
+		console.log("closed");
+		log("WebSocket disconnected");
+		wsConnected = false;
+	};
+
+	ws.onerror = () => {
+		console.log("error");
+		log("WebSocket error");
+		wsConnected = false;
+	};
+
+	ws.onmessage = (e) => {
+		let msg;
+		try {
+			msg = JSON.parse(e.data);
+		} catch {
+			console.log("rx (non-json): " + e.data);
+			return;
+		}
+
+		if (msg.type === "telemetry") {
+			const sensor = msg.sensor;
+			const data   = msg.data;
+
+			const el = document.getElementById(`sensor.${sensor}`);
+			if (el) {
+				el.textContent = formatTelemetry(data);
+			}
+		}
+		else if (msg.type === "command") {
+			if (msg.command_id === 19) refreshImages();
+			else if (msg.command_id === 20) refreshGraph();
+		}
+		else if (msg.type === "console") {
+			log(msg.message);
+		}
+	};
+}
+connectWs();
+
+setInterval(() => {
+	if (!wsConnected) {
+		console.log("attempting WebSocket reconnect...");
+		log("attempting WebSocket reconnect...");
+
+		try {
+			if (ws) ws.close();
+		} catch {}
+
+		connectWs();
+	}
+}, 5000);
+
+let indicatorFlash = false;
+let lastState = false;
+
+setInterval(() => {
+	const header = document.getElementById("pageHeader");
+	if (!header) return;
+
+	if (!wsConnected) {
+		lastState = false;
+		indicatorFlash = !indicatorFlash;
+		header.style.backgroundColor = indicatorFlash
+			? "var(--warningRed)"
+			: "";
+	}
+	else {
+		if (!lastState) {
+			lastState = true;
+			header.style.backgroundColor = "var(--safeGreen)";
+		}
+		else {
+			header.style.backgroundColor = "";
+		}
+	}
+}, 1000);
+
+const consoleInput = document.getElementById("consoleInput");
+if (consoleInput) {
+	consoleInput.addEventListener("keypress", (e) => {
+		if (e.key === "Enter") {
+			const message = consoleInput.value.trim();
+			if (!message) return;
+
+			log("> " + message);
+
+			if (ws && wsConnected) {
+				ws.send(JSON.stringify({
+					type: "console",
+					message
+				}));
+			}
+			else {
+				log("(not sent: websocket disconnected)");
+			}
+
+			consoleInput.value = "";
+		}
+	});
+}
+
+function log(msg) {
+	const consoleContents =
+		document.getElementsByClassName("consoleContents")[0];
+	if (!consoleContents) return;
+
+	consoleContents.innerHTML += msg + "<br>";
+	consoleContents.scrollTop = consoleContents.scrollHeight;
+}
+
+</script>
+
+
+
+  <script>	// Simple hierarchical menu system
+    const PAGES = {
+	  home: {
+		title: "Satellites",
+		items: [
+		  { text: "0xEF", type: "submenu", page: "0xEF" },
+		],
+	  },
+      "0xEF": {
+        title: "0xEF Main Menu",
+        items: [
+		  { text: "Modules", type: "submenu", page: "modules" },
+          { text: "Cmd Ping", type: "command", console: "cmd {sat} 0x00" },
+        ],
+      },
+	  "modules": {
+		title: "Modules Menu",
+		items: [
+		  { text: "OBC", type: "submenu", page: "modules.obc" },
+		  { text: "Dual Camera", type: "submenu", page: "modules.dualcamera" },
+		  { text: "IMU", type: "submenu", page: "modules.imu" },
+		],
+	  },
+	  "modules.obc": {
+		title: "OBC",
+		items: [
+		  { text: "Get Deploy Status", type: "command", console: "tlm {sat} 0x01" },
+		  { text: "Get CPU Temp", type: "command", console: "tlm {sat} 0x03" },
+		  { text: "Power Off", type: "command", console: "cmd {sat} 0x01" },
+		  { text: "Reboot", type: "command", console: "cmd {sat} 0x02" },
+		],
+	  },
+	  "modules.dualcamera": {
+		title: "Dual Camera",
+		items: [
+		  { text: "Trigger Capture", type: "command", console: "cmd {sat} 0x11" },
+		],
+	  },
+	  "modules.imu": {
+		title: "IMU",
+		items: [
+			{ text: "Trigger Capture", type: "command", console: "cmd {sat} 0x11" },
+			{ text: "Get Calibration Status", type: "command", console: "tlm {sat} 0x2010" },
+			{ text: "Get Euler Angles", type: "command", console: "tlm {sat} 0x2020" },
+			{ text: "Get Quaternion", type: "command", console: "tlm {sat} 0x2030" },
+			{ text: "Get Linear Accel.", type: "command", console: "tlm {sat} 0x2050" },
+			{ text: "Get Gravity", type: "command", console: "tlm {sat} 0x2040" },
+			{ text: "dummy", type: "command", console: " " },
+		],
+	  },
+
+
+
+    };
+
+    // 2) Navigation stack: last entry is the current page key
+    const navStack = ["home","0xEF"];
+
+    const menuEl = document.getElementById("menu");
+    const titleEl = document.getElementById("title");
+    const backBtn = document.getElementById("backBtn");
+
+    function currentPageKey() {
+      return navStack[navStack.length - 1];
+    }
+
+    function render() {
+      const key = currentPageKey();
+      const page = PAGES[key];
+      if (!page) throw new Error("Unknown page: " + key);
+
+      titleEl.textContent = page.title;
+      backBtn.disabled = navStack.length === 1;
+
+      // Clear menu
+      menuEl.innerHTML = "";
+
+      // Build buttons
+      for (const item of page.items) {
+        const btn = document.createElement("div");
+		btn.className = "quickMenuItem";
+        btn.textContent = item.text;
+
+        btn.addEventListener("click", () => {
+          if (item.type === "submenu") {
+            navStack.push(item.page);
+            render();
+          } else if (item.type === "command") {
+			let message = item.console.trim();
+			message = message.replace("{sat}", navStack[1]); // current sat ID
+			if (!message) return;
+
+			log("> " + message);
+
+			if (ws && wsConnected) {
+				ws.send(JSON.stringify({
+					type: "console",
+					message
+				}));
+			}
+			else {
+				log("(not sent: websocket disconnected)");
+			}
+
+          } else {
+          }
+        });
+
+        menuEl.appendChild(btn);
+      }
+    }
+
+    backBtn.addEventListener("click", () => {
+      if (navStack.length > 1) {
+        navStack.pop();
+        render();
+      }
+    });
+
+    render();
+  </script>
+
+
+</html>

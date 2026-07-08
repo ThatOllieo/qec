@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <cctype>
+#include <cstring>
 #include <atomic>
 #include <mutex>
 #include <chrono>
@@ -45,6 +46,43 @@ static uint8_t parse_u8(const std::string &s) {
 static std::unordered_map<uint16_t, std::function<void(const std::vector<uint8_t>&)>> telem_plans;
 static std::unordered_map<uint16_t, std::function<void()>>                            cmd_plans;
 static std::mutex plans_mtx;
+
+// Decode a telemetry payload into a JSON value using knowledge of the wire
+// schema for each sensor id (mirrors gather_telem_bytes on the satellite).
+// Anything unknown, or a payload that's short for what its sensor id
+// expects, falls back to sending the raw byte array unchanged.
+static float telem_f32le(const std::vector<uint8_t>& b, size_t off) {
+    float v;
+    std::memcpy(&v, b.data() + off, sizeof(float));
+    return v;
+}
+
+static json decode_telem(uint16_t sensor, const std::vector<uint8_t>& bytes) {
+    switch (sensor) {
+        case 0x0001: // deploy switch state
+            if (bytes.size() >= 1) return json{{"deployed", bytes[0] != 0}};
+            break;
+        case 0x0003: // CPU temp (deg C)
+            if (bytes.size() >= 4) return telem_f32le(bytes, 0);
+            break;
+        case 0x2010: // IMU calibration status: sys, gyro, accel, mag (0-3 each)
+            if (bytes.size() >= 4) return json{{"sys", bytes[0]}, {"gyro", bytes[1]}, {"accel", bytes[2]}, {"mag", bytes[3]}};
+            break;
+        case 0x2020: // IMU Euler angles: heading, roll, pitch
+            if (bytes.size() >= 12) return json{{"heading", telem_f32le(bytes, 0)}, {"roll", telem_f32le(bytes, 4)}, {"pitch", telem_f32le(bytes, 8)}};
+            break;
+        case 0x2030: // IMU quaternion: w, x, y, z
+            if (bytes.size() >= 16) return json{{"w", telem_f32le(bytes, 0)}, {"x", telem_f32le(bytes, 4)}, {"y", telem_f32le(bytes, 8)}, {"z", telem_f32le(bytes, 12)}};
+            break;
+        case 0x2040: // IMU gravity vector: x, y, z
+        case 0x2050: // IMU linear accel: x, y, z
+            if (bytes.size() >= 12) return json{{"x", telem_f32le(bytes, 0)}, {"y", telem_f32le(bytes, 4)}, {"z", telem_f32le(bytes, 8)}};
+            break;
+        default:
+            break;
+    }
+    return bytes; // unknown sensor id or short/malformed payload
+}
 
 void cmdLineOut(const std::string &msg, WSLink &wslink) {
     std::cout << msg << std::endl;
@@ -117,7 +155,7 @@ bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) 
                 json j = {
                     {"type", "telemetry"},
                     {"sensor", sensor},
-                    {"data", bytes}
+                    {"data", decode_telem(sensor, bytes)}
                 };
                 wslink.broadcast(j.dump());
             };
@@ -292,7 +330,7 @@ int run(int argc, char* argv[]) {
                             json j = {
                                 {"type", "telemetry"},
                                 {"sensor", x},
-                                {"data", bytes}
+                                {"data", decode_telem(x, bytes)}
                             };
                             wslink.broadcast(j.dump());
                         };
