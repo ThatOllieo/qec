@@ -373,12 +373,6 @@ void CommsManager::cancel_pending(uint16_t correlation_id) {
     pending_.erase(correlation_id);
 }
 
-// Little-endian write helper (kept local here to avoid header dependency)
-static inline void put16_le(std::vector<uint8_t>& v, uint16_t x) {
-    v.push_back(uint8_t(x & 0xFF));
-    v.push_back(uint8_t(x >> 8));
-}
-
 uint16_t CommsManager::request_telem_async(uint8_t dest,
                                            ChannelId via,
                                            uint16_t sensor_id,
@@ -392,8 +386,8 @@ uint16_t CommsManager::request_telem_async(uint8_t dest,
     m.src  = sat_src;
     m.dest = dest;
     m.channel_hint = via;
+    m.command_or_sensor_id = sensor_id;
     m.payload.clear();
-    put16_le(m.payload, sensor_id);
 
     if (!send_via(m)) return 0;
 
@@ -424,8 +418,8 @@ uint16_t CommsManager::send_command_async(uint8_t dest,
     m.src  = sat_src;
     m.dest = dest;
     m.channel_hint = via;
+    m.command_or_sensor_id = command_id;
     m.payload.clear();
-    put16_le(m.payload, command_id);
     m.payload.insert(m.payload.end(), args.begin(), args.end());
 
     if (!send_via(m)) return 0;
@@ -505,7 +499,8 @@ void CommsManager::pending_supervisor_loop() {
 // Turn inbound messages into semantic events and remember where to reply
 void CommsManager::raise_semantic_event_and_track_route(const CommsMessage& m) {
     // First: is this a reply to one of our outbound requests?
-    if (m.type == MessageType::I_TLM_PT || m.type == MessageType::I_CMD_OK || m.type == MessageType::I_CMD_ER) {
+    if (m.type == MessageType::I_TLM_PT || m.type == MessageType::I_TLM_ER ||
+        m.type == MessageType::I_CMD_OK || m.type == MessageType::I_CMD_ER) {
         std::unique_lock<std::mutex> lk(pending_mx_);
         auto it = pending_.find(m.correlation_id);
         if (it != pending_.end()) {
@@ -519,6 +514,13 @@ void CommsManager::raise_semantic_event_and_track_route(const CommsMessage& m) {
                 Event e; e.type = EventType::TelemetryArrived; e.data = std::move(d);
                 main_events_.push(std::move(e));
                 return; // handled
+            }
+            // Telemetry error
+            if (m.type == MessageType::I_TLM_ER) {
+                EvTelemetryFailed d; d.correlation_id = m.correlation_id; d.reason = "error";
+                Event e; e.type = EventType::TelemetryFailed; e.data = std::move(d);
+                main_events_.push(std::move(e));
+                return;
             }
             // Command ack (OK or ER)
             if (m.type == MessageType::I_CMD_OK) {
@@ -541,8 +543,10 @@ void CommsManager::raise_semantic_event_and_track_route(const CommsMessage& m) {
         (m.type == MessageType::I_CMD_RQ || m.type == MessageType::I_TLM_RQ)) {
 
         ReplyRoute rr;
-        rr.requester_id = m.src;
-        rr.via          = m.channel_hint;
+        rr.requester_id         = m.src;
+        rr.via                  = m.channel_hint;
+        rr.command_or_sensor_id = m.command_or_sensor_id;
+        rr.payload              = m.payload;
         {
             std::lock_guard<std::mutex> lk(routes_mx);
             reply_routes_[m.correlation_id] = rr;
@@ -551,40 +555,32 @@ void CommsManager::raise_semantic_event_and_track_route(const CommsMessage& m) {
 
     switch (m.type) {
         case MessageType::I_CMD_RQ: {
-            // payload: [cmd_id(2)][args...]
-            if (m.payload.size() < 2) {
-                std::cerr << "[WARN][COMMS] Dropping malformed command request\n";
-                break;
-            }
-            uint16_t cmd_id = uint16_t(m.payload[0] | (uint16_t(m.payload[1]) << 8));
+            // command_id carried in m.command_or_sensor_id; payload is args-only
+            uint16_t cmd_id = m.command_or_sensor_id;
 
             EvCommand evp;
             evp.command_id     = cmd_id;
             evp.correlation_id = m.correlation_id;
             evp.requester_id   = m.src;
             evp.reply_via      = static_cast<uint8_t>(m.channel_hint);
-            if (m.payload.size() > 2)
-                evp.args.assign(m.payload.begin()+2, m.payload.end());
+            if (!m.payload.empty())
+                evp.args.assign(m.payload.begin(), m.payload.end());
 
             Event e; e.type = EventType::Command; e.data = std::move(evp);
             main_events_.push(std::move(e));
             break;
         }
         case MessageType::I_TLM_RQ: {
-            // payload: [sensor_id(2)][params...]
-            if (m.payload.size() < 2) {
-                std::cerr << "[WARN][COMMS] Dropping malformed telemetry request\n";
-                break;
-            }
-            uint16_t sensor_id = uint16_t(m.payload[0] | (uint16_t(m.payload[1]) << 8));
+            // sensor_id carried in m.command_or_sensor_id; payload is params-only
+            uint16_t sensor_id = m.command_or_sensor_id;
 
             EvTelemetryRequest evp;
             evp.sensor_id      = sensor_id;
             evp.correlation_id = m.correlation_id;
             evp.requester_id   = m.src;
             evp.reply_via      = static_cast<uint8_t>(m.channel_hint);
-            if (m.payload.size() > 2)
-                evp.params.assign(m.payload.begin()+2, m.payload.end());
+            if (!m.payload.empty())
+                evp.params.assign(m.payload.begin(), m.payload.end());
 
             Event e; e.type = EventType::TelemetryRequest; e.data = std::move(evp);
             main_events_.push(std::move(e));
@@ -610,12 +606,13 @@ void CommsManager::reply_ok_command(uint16_t correlation_id) {
     }
 
     CommsMessage m;
-    m.src            = sat_src; // SAT ID (set yours)
-    m.dest           = route.requester_id;
-    m.type           = MessageType::I_CMD_OK;
-    m.correlation_id = correlation_id;
-    m.channel_hint   = route.via;
-    m.payload = {}; // optional status code
+    m.src                   = sat_src; // SAT ID (set yours)
+    m.dest                  = route.requester_id;
+    m.type                  = MessageType::I_CMD_OK;
+    m.correlation_id        = correlation_id;
+    m.command_or_sensor_id  = route.command_or_sensor_id;
+    m.channel_hint          = route.via;
+    m.payload               = route.payload; // echo of the original command's args
 
     send(m);
 }
@@ -631,12 +628,13 @@ void CommsManager::reply_err_command(uint16_t correlation_id) {
     }
 
     CommsMessage m;
-    m.src            = sat_src; // SAT ID (set yours)
-    m.dest           = route.requester_id;
-    m.type           = MessageType::I_CMD_ER;
-    m.correlation_id = correlation_id;
-    m.channel_hint   = route.via;
-    m.payload = {}; // optional status code
+    m.src                   = sat_src; // SAT ID (set yours)
+    m.dest                  = route.requester_id;
+    m.type                  = MessageType::I_CMD_ER;
+    m.correlation_id        = correlation_id;
+    m.command_or_sensor_id  = route.command_or_sensor_id;
+    m.channel_hint          = route.via;
+    m.payload               = route.payload; // echo of the original command's args
 
     send(m);
 }
@@ -652,12 +650,35 @@ void CommsManager::reply_telem(uint16_t correlation_id, const std::vector<uint8_
     }
 
     CommsMessage m;
-    m.src            = sat_src; // SAT ID
-    m.dest           = route.requester_id;
-    m.type           = MessageType::I_TLM_PT;
-    m.correlation_id = correlation_id;
-    m.channel_hint   = route.via;
-    m.payload        = data;
+    m.src                   = sat_src; // SAT ID
+    m.dest                  = route.requester_id;
+    m.type                  = MessageType::I_TLM_PT;
+    m.correlation_id        = correlation_id;
+    m.command_or_sensor_id  = route.command_or_sensor_id;
+    m.channel_hint          = route.via;
+    m.payload               = data;
+
+    send(m);
+}
+
+void CommsManager::reply_err_telem(uint16_t correlation_id) {
+    ReplyRoute route;
+    {
+        std::lock_guard<std::mutex> lk(routes_mx);
+        auto it = reply_routes_.find(correlation_id);
+        if (it == reply_routes_.end()) return; // unknown or already answered
+        route = it->second;
+        reply_routes_.erase(it);
+    }
+
+    CommsMessage m;
+    m.src                   = sat_src; // SAT ID
+    m.dest                  = route.requester_id;
+    m.type                  = MessageType::I_TLM_ER;
+    m.correlation_id        = correlation_id;
+    m.command_or_sensor_id  = route.command_or_sensor_id;
+    m.channel_hint          = route.via;
+    m.payload               = {}; // optional status code
 
     send(m);
 }

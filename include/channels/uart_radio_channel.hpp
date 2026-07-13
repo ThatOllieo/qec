@@ -22,7 +22,7 @@
  *   [len : 2 bytes LE][frame bytes...]
  *
  * where 'frame bytes' is exactly what serialize() produces:
- *   [body_len : 2 LE][type : 1][correlation_id : 2 LE][src : 1][dest : 1][payload...]
+ *   [body_len : 2 LE][type : 1][correlation_id : 2 LE][src : 1][dest : 1][command_or_sensor_id : 2 LE][payload...]
  *
  * serialize() and parse() are copied verbatim from RadioChannel — they are
  * transport-agnostic and unchanged. Only the hw_* layer below them is new.

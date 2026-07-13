@@ -144,7 +144,7 @@ void TcpChannel::rx_loop() {
             }
             uint16_t body_len = get16(lenbuf);
 
-            if (body_len < 5) {
+            if (body_len < 7) {
                 std::cerr << "[TcpChannel] invalid frame length " << body_len << ", marking channel Failed\n";
                 set_state(ChannelState::Failed);
                 break;
@@ -183,29 +183,31 @@ void TcpChannel::rx_loop() {
 }
 
 std::vector<uint8_t> TcpChannel::serialize(const CommsMessage& m) {
-    const uint16_t body_len = uint16_t(1 + 2 + 1 + 1 + m.payload.size());
+    const uint16_t body_len = uint16_t(1 + 2 + 1 + 1 + 2 + m.payload.size());
     std::vector<uint8_t> f; f.reserve(2 + body_len);
     put16(f, body_len);
     f.push_back(static_cast<uint8_t>(m.type));
     put16(f, m.correlation_id);
     f.push_back(m.src);
     f.push_back(m.dest);
+    put16(f, m.command_or_sensor_id);
     f.insert(f.end(), m.payload.begin(), m.payload.end());
     return f;
 }
 
 bool TcpChannel::parse(const std::vector<uint8_t>& f, CommsMessage& out) {
-    if (f.size() < 7) return false;
+    if (f.size() < 9) return false;
     const size_t len = uint16_t(f[0] | (uint16_t(f[1])<<8));
     const size_t expect = len + 2;
     if (expect != f.size()) return false;
 
-    out.type           = static_cast<MessageType>(f[2]);
-    out.correlation_id = uint16_t(f[3] | (uint16_t(f[4])<<8));
-    out.src            = f[5];
-    out.dest           = f[6];
-    out.channel_hint   = ChannelId::Wifi; 
-    
-    out.payload.assign(f.begin()+7, f.end());
+    out.type                 = static_cast<MessageType>(f[2]);
+    out.correlation_id       = uint16_t(f[3] | (uint16_t(f[4])<<8));
+    out.src                  = f[5];
+    out.dest                 = f[6];
+    out.command_or_sensor_id = uint16_t(f[7] | (uint16_t(f[8])<<8));
+    out.channel_hint         = ChannelId::Wifi;
+
+    out.payload.assign(f.begin()+9, f.end());
     return true;
 }

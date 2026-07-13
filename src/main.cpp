@@ -645,8 +645,13 @@ int run() {
                 case EventType::TelemetryRequest: {
                     auto& t = std::get<EvTelemetryRequest>(e.data);
                     std::cout << "[MAIN] Tlm CorrId: " << t.correlation_id << " sensorid: " << t.sensor_id << std::endl;
-                    auto bytes = gather_telem_bytes(t.sensor_id,deploy,imu);
-                    comms.reply_telem(t.correlation_id, bytes);
+                    try {
+                        auto bytes = gather_telem_bytes(t.sensor_id,deploy,imu);
+                        comms.reply_telem(t.correlation_id, bytes);
+                    } catch (const QecException& ex) {
+                        logLine(ex.severity(), "MAIN", std::string("telemetry gather failed: ") + ex.what());
+                        comms.reply_err_telem(t.correlation_id);
+                    }
                     break;
                 }
 

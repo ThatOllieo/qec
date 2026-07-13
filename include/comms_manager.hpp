@@ -36,10 +36,11 @@ public:
     // Generic send (still available)
     void send(const CommsMessage& msg);
 
-    // Friendly replies 
+    // Friendly replies
     void reply_ok_command(uint16_t correlation_id);
     void reply_err_command(uint16_t correlation_id);
     void reply_telem(uint16_t correlation_id, const std::vector<uint8_t>& data);
+    void reply_err_telem(uint16_t correlation_id);
 
     uint16_t request_telem_async(
         uint8_t dest,
@@ -114,6 +115,8 @@ private:
     struct ReplyRoute {
         uint8_t  requester_id;     // original src
         ChannelId via;             // channel to use
+        uint16_t command_or_sensor_id = 0; // stashed from the original request, consumed by reply_telem/reply_err_telem
+        std::vector<uint8_t> payload;      // echo of the original request's payload, consumed by reply_ok_command/reply_err_command
     };
     std::unordered_map<uint16_t, ReplyRoute> reply_routes_; // key: correlation_id
     std::mutex routes_mx; // protects reply_routes_

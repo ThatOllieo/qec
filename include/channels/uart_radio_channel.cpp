@@ -376,7 +376,7 @@ bool UartRadioChannel::write_frame(const std::vector<uint8_t>& wire) {
 
 /* ── Wire format (verbatim from RadioChannel) ────────────────────────────── */
 std::vector<uint8_t> UartRadioChannel::serialize(const CommsMessage& m) {
-    const uint16_t body_len = uint16_t(1 + 2 + 1 + 1 + m.payload.size());
+    const uint16_t body_len = uint16_t(1 + 2 + 1 + 1 + 2 + m.payload.size());
     std::vector<uint8_t> f;
     f.reserve(2 + body_len);
     put16le(f, body_len);
@@ -384,21 +384,23 @@ std::vector<uint8_t> UartRadioChannel::serialize(const CommsMessage& m) {
     put16le(f, m.correlation_id);
     f.push_back(m.src);
     f.push_back(m.dest);
+    put16le(f, m.command_or_sensor_id);
     f.insert(f.end(), m.payload.begin(), m.payload.end());
     return f;
 }
 
 bool UartRadioChannel::parse(const std::vector<uint8_t>& f, CommsMessage& out) {
-    if (f.size() < 7) return false;
+    if (f.size() < 9) return false;
 
     uint16_t body_len = get16le(f.data());
     if (size_t(body_len) + 2 != f.size()) return false;
 
-    out.type           = static_cast<MessageType>(f[2]);
-    out.correlation_id = get16le(f.data() + 3);
-    out.src            = f[5];
-    out.dest           = f[6];
-    out.channel_hint   = ChannelId::Uart;
-    out.payload.assign(f.begin() + 7, f.end());
+    out.type                  = static_cast<MessageType>(f[2]);
+    out.correlation_id        = get16le(f.data() + 3);
+    out.src                   = f[5];
+    out.dest                  = f[6];
+    out.command_or_sensor_id  = get16le(f.data() + 7);
+    out.channel_hint          = ChannelId::Uart;
+    out.payload.assign(f.begin() + 9, f.end());
     return true;
 }
