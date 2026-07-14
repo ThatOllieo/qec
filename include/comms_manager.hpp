@@ -86,6 +86,11 @@ private:
         MessageType expect_type;                        // TelemetryResp or CommandAck
         CommsMessage original;                          // original request message (for retry)
         std::chrono::steady_clock::time_point deadline; // when to retry/fail
+        // CAN EXCEPTION: only used by the CAN content-based match tie-break in
+        // raise_semantic_event_and_track_route (comms_manager.cpp). Not needed by
+        // any channel that carries a real correlation_id. Delete this field if CAN's
+        // protocol is ever changed to carry one and the CAN exception is removed.
+        std::chrono::steady_clock::time_point created_at{};
         int retries_left = 0;                           // remaining retries
     };
 
