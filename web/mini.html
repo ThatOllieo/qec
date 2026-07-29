@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<body>
+   	<h3>WebSocket test</h3>
+
+    <h4>Sensors</h4>
+    <div id="sensor.1">sensor 1: (no data)</div>
+    <div id="sensor.2">sensor 2: (no data)</div>
+    <div id="sensor.3">sensor 3: (no data)</div>
+
+<script>
+
+	const ws = new WebSocket("ws://100.76.130.80:9002");
+
+	ws.onopen = () => console.log("connected");
+	ws.onclose = () => console.log("closed");
+	ws.onerror = () => console.log("error");
+
+	ws.onmessage = (e) => {
+		// Some frames might not be JSON, so guard it.
+		let msg;
+		try {
+			msg = JSON.parse(e.data);
+		} catch {
+			console.log("rx (non-json): " + e.data);
+			return;
+		}
+
+		// Only handle telemetry frames
+		if (msg.type === "telemetry") {
+			const sensor = msg.sensor;                         // e.g. 1
+			const bytes    = msg.data;                             // e.g. [12,34,56]
+
+			const id = `sensor.${sensor}`;                 // "sensor.1"
+			const el = document.getElementById(id);
+
+			if (el) {
+				// Put whatever formatting you want here:
+				// - raw bytes
+				// - hex
+				// - decoded values, etc.
+				el.textContent = `sensor ${sensor}: [${bytes.join(", ")}]`;
+			} else {
+				console.log(`telemetry for ${id} but element not found`);
+			}
+		} else {
+			console.log("rx json: " + e.data);
+		}
+	};
+</script>
+</body>
+</html>

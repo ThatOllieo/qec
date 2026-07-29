@@ -23,5 +23,5 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> deployed_{false};
     gpiod_chip* chip_ = nullptr;
-    gpiod_line* line_ = nullptr;   
+    gpiod_line_request* request_ = nullptr;
 };

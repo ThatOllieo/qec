@@ -9,6 +9,8 @@
 #include <mutex>
 #include <chrono>
 
+#include "exceptions.hpp"
+
 class CommsManager {
 public:
     explicit CommsManager(TSQueue<Event>& main_events);
@@ -26,6 +28,10 @@ public:
     void restart_channel(ChannelId id);
 
     void enable_autoreconnect(ChannelId id, bool on);
+
+    // Read the current state of a registered channel. Returns ChannelState::Stopped
+    // if the channel id isn't registered.
+    ChannelState channel_state(ChannelId id) const;
 
     // Generic send (still available)
     void send(const CommsMessage& msg);
@@ -69,6 +75,7 @@ private:
         std::thread rebooter;
     };
     std::unordered_map<ChannelId, ChanWrap> chans_;
+    mutable std::mutex chans_mx_;
 
     void on_channel_state(ChannelId id, ChannelState st);
     void schedule_reconnect(ChannelId id);

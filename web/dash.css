@@ -1,0 +1,355 @@
+@charset "UTF-8";
+/* CSS Document */
+
+:root{
+    --background: #14171c;
+    --container: #283140;
+    --brighter: #384863;
+    --keyDark: #1c1917;
+
+    /*--warningRed: #ff4c4c;
+    --safeGreen: #4cff88;*/
+
+    --warningRed: #e34242; /*#ff1e1e;*/
+    --safeGreen: #4cff88; /*#1eff1e;*/
+
+    --sexyYellow: #fcba03;
+}
+
+body{
+    background: var(--background);
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    width: 99vw;
+    height: 99vh;
+    
+    font-family: sans-serif;
+    
+}	
+.upperTLContainer{
+    
+    width: 100%;
+    min-height: 60%;
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+}
+.lowerTLContainer{
+    
+    background: var(--container);
+    width: 100%;
+    min-height: 40%;
+
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+}
+.statsContainer{
+    
+    height: 100%;
+    min-width: 20%;
+    
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    flex-direction: column;
+}
+.imagesContainer{
+    
+    height: 100%;
+    min-width: 80%;
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+}
+.flexPanelContainer{
+    
+    height: 100%;
+    min-width: 70%;
+    
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    flex-direction: column;
+}
+.fileBrowserContainer{
+    
+    height: 100%;
+    min-width: 30%;
+    
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    flex-direction: column;
+}
+.duoImageL{
+    max-width: calc(50% - 11.25px);
+    max-height: calc(100% - 15px);
+    margin: 0 3.75px 0 7.5px;
+    border-radius: 7.5px;
+
+    rotate: 180deg;
+}
+.duoImageR{
+    max-width: calc(50% - 11.25px);
+    max-height: calc(100% - 15px);
+    margin: 0 7.5px 0 3.75px;
+    border-radius: 7.5px;
+    rotate: 180deg;
+}
+.flexPanelHeader{
+    height: 100%;
+    background: var(--brighter);
+    clip-path: polygon(
+        0 0,
+        100% 0,
+        calc(100% - 15px) 100%,
+        0 100%
+    );
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+
+    cursor: pointer;
+}
+.flexPanelHeaderDW{
+    height: 100%;
+    background: var(--background);
+    clip-path: polygon(
+        15px 0,
+        100% 0,
+        calc(100% - 15px) 100%,
+        0 100%
+    );
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    
+    position: relative;
+    left: -15px;
+
+    cursor: pointer;
+}
+.flexPanelHeaderContainer{
+    width: 100%;
+    height: 30px;
+    
+    display: flex;
+    flex-direction: row;
+    
+    justify-content: flex-start;
+    align-items: center;
+
+    position: relative;
+}
+.flexPanelHeaderText{
+    margin: 0 22.5px 0 15px;
+}
+.flexPanelHeaderTextDW{
+    margin: 0 22.5px 0 22.5px;
+}
+.flexPanelContentContainer{
+    width: 100%;
+    height: calc(100% - 30px);
+    display: flex;
+    flex-direction: row;
+    
+    justify-content: center;
+    align-items: center;
+}
+
+.fileBrowserHeader{
+    
+    width: 100%;
+    height: 30px;
+
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+}
+.fileBrowserContentContainer{
+    
+    width: 100%;
+    height: calc(100% - 30px);
+}
+.pageHeaderContainer{
+    width: 100%;
+    height: 60px;
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    
+}
+.pageHeader{
+    background: var(--brighter);
+    max-width: 100%;
+    height: 100%;
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    
+    clip-path: polygon(
+        0 0,
+        100% 0,
+        calc(100% - 30px) 100%,
+        0 100%
+    );
+}
+
+.pageHeaderText{
+    font-size: 2em;
+    margin: 0 45px 0 15px;
+    font-weight: 700;
+}
+
+.statsContent{
+    background: var(--container);
+    width: calc(100% - 60px);
+    height: calc(100% - 60px);
+    margin: 30px;
+    padding: 7.5px;
+    border-radius: 7.5px;
+    
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: flex-start;
+}
+
+t{
+    font-size: 1em;
+    font-weight: 400;
+}
+.bigText{
+    font-size: 1.5em;
+    font-weight: 600;
+}
+
+.chartContainer{
+    background: var(--brighter);
+    height: calc(100% - 30px);
+    margin: 15px;
+    width: calc(50% - 30px);
+    border-radius: 7.5px;
+}
+
+.chartContainerFW{
+    background: var(--brighter);
+    height: calc(100% - 30px);
+    margin: 15px;
+    width: calc(100% - 30px);
+    border-radius: 7.5px;
+}
+
+.consoleContainer{
+    background: var(--keyDark);
+    height: calc(100% - 60px);
+    max-height: calc(100% - 60px);;
+    margin: 15px;
+    width: calc(100% - 60px);
+    border-radius: 7.5px;
+    padding: 15px;
+    
+    overflow: hidden;
+    font-family: monospace;
+    font-size: 0.9em;
+
+    display: none;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+}
+
+.consoleContents{
+    overflow-y: auto;
+    white-space: pre-wrap;
+    width: 100%; 
+    height: calc(100% - 45px);
+}
+
+.consoleBar{
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    border-top: white 1px solid;
+    height: 45px;
+}
+.consoleBar input{
+    background: transparent;
+    border: none;
+    width: 100%;
+    height: 100%;
+    color: white;
+    font-family: monospace;
+}
+
+.quickMenuContent{
+    background: var(--background);
+    width: calc(100% - 15px);
+    height: calc(100% - 30px - 7.5px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+
+    margin: 15px 15px 15px 0;
+    border-radius: 7.5px;
+
+    padding: 3.75px 0;
+}
+
+.quickMenuHeader{
+    height: 100%;
+    background: var(--brighter);
+    clip-path: polygon(
+        0 0,
+        100% 0,
+        calc(100% - 15px) 100%,
+        0 100%
+    );
+    
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+
+    cursor: pointer;
+}
+
+.quickMenuHeaderText{
+    margin: 0 22.5px 0 15px;
+}
+
+.quickMenuItem{
+    background: var(--brighter);
+    width: calc(100% - 30px);
+    height: 45px;
+    margin: 3.75px 15px;
+    border-radius: 7.5px;
+
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+
+    cursor: pointer;
+}

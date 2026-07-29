@@ -1,14 +1,5 @@
 #pragma once
 
-#include <atomic>
-#include <thread>
-#include <string>
-#include <memory>
-
-#include <boost/asio.hpp>
-#include <boost/beast.hpp>
-#include <boost/beast/websocket.hpp>
-
 #include "../include/tsqueue.hpp"
 #include "../include/events.hpp"
 

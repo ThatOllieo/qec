@@ -1,19 +1,20 @@
 project('ukgs', 'cpp',
-  version: '0.1',
+  version: '1.0.1',
   default_options: ['warning_level=3', 'cpp_std=c++17'])
 
 main_src = files('src/main.cpp')
 comm_src = files('src/comms_manager.cpp')
-udp_channel = files('include/channels/udp_channel.cpp')
-rad_channel = files('include/channels/radio_channel.cpp')
+udp_channel  = files('include/channels/udp_channel.cpp')
+rad_channel  = files('include/channels/radio_channel.cpp')
+uart_channel = files('include/channels/uart_radio_channel.cpp')
 ws_link = files('src/ws_link.cpp')
+gpiod_dep = dependency('libgpiod', version: '>=2.0')
 
-gpiod_dep = dependency('libgpiod', required: true)
 boost_dep = dependency('boost', modules : ['system'], required: true)
 json_dep = dependency('nlohmann_json', required: true)
 
-executable('ukgs',
-  [main_src,comm_src,udp_channel,rad_channel,ws_link],
+executable('uk',
+  [main_src,comm_src,udp_channel,rad_channel,uart_channel,ws_link],
   include_directories: include_directories('src'),
-  dependencies: [gpiod_dep,boost_dep]
+  dependencies: [boost_dep, json_dep, gpiod_dep]
 )

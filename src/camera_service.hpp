@@ -1,10 +1,13 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <string>
 
 // Your existing headers:
 #include "../include/events.hpp"   // Event, EventType, EvPhotoTaken
 #include "../include/tsqueue.hpp"  // TSQueue<Event>
+#include "../include/module_states.hpp"
+#include "../include/exceptions.hpp"
 
 struct CameraModuleConfig {
     int      left_index   = 0;     // physical camera index for "left" (0-based)
@@ -23,7 +26,7 @@ public:
 
     // One-shot startup that configures BOTH cameras (by index) and launches internal threads.
     // Returns true if both requested cameras were started successfully.
-    bool startup(const CameraModuleConfig& cfg);
+    void startup(const CameraModuleConfig& cfg);
 
     // Non-blocking capture requests. Each will warm-up, capture, JPEG, then push a PhotoTaken event.
     void take_left (const std::string& path, uint32_t seq = 0);
@@ -37,7 +40,10 @@ public:
     CameraModule(const CameraModule&) = delete;
     CameraModule& operator=(const CameraModule&) = delete;
 
+    ModuleState state() {return state_.load();};
+
 private:
+    std::atomic<ModuleState> state_{ModuleState::Stopped};
     struct Impl;
     Impl* d_;  // pImpl to keep libcamera out of main
 };
