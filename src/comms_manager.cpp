@@ -155,6 +155,10 @@ void CommsManager::outbound_loop() {
             if (!running_) break;
 
             ChannelId via = out.channel_hint;
+            if ((out.dest & 0xF0) == 0xF0){ //ensures that 0xF* addresses are always sent on the CAN bus, as they are reserved for the CAN protocol
+                via = ChannelId::Can;
+            }
+
             if (via == ChannelId::Auto){
                 std::lock_guard<std::mutex> lk(chans_mx_);
                 auto running = [&](ChannelId cid) {

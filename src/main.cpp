@@ -12,6 +12,7 @@
 #include "../include/channels/udp_channel.hpp"
 #include "../include/channels/radio_channel.hpp"
 #include "../include/channels/uart_radio_channel.hpp"
+#include "../include/channels/can_channel.hpp"
 #include "utils.hpp"
 
 #include "../include/exceptions.hpp"
@@ -466,6 +467,26 @@ int run() {
         return 1;
     }
 
+    try{
+        CanConfig cancfg;
+        cancfg.interface = "can0";
+        cancfg.sat_src = sat_src;
+        auto can_channel = std::make_unique<CanChannel>(cancfg);
+        comms.register_channel(std::move(can_channel));
+    }
+    catch (const CommsError& ex) {
+        logStartupFailure("COMMS", "Failed to setup and register CAN channel", ex);
+        if (ex.severity() == ErrorSeverity::Fatal) { return 1; }
+    }
+    catch (const std::exception& ex) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register CAN channel with std::exception: " << ex.what() << '\n';
+        return 1;
+    }
+    catch (...) {
+        std::cerr << "[FATAL][COMMS] Failed to setup and register CAN channel with unknown exception\n";
+        return 1;
+    }
+
 
 
 
@@ -695,6 +716,14 @@ int run() {
                 }
                 // periodic health broadcast
                 case EventType::HeartbeatTick: {
+                    CommsMessage chb;
+                    chb.type = MessageType::I_BRD;
+                    chb.src = sat_src;
+                    chb.dest = 0xF1;
+                    chb.correlation_id = 0;
+                    chb.channel_hint = ChannelId::Auto;
+                    comms.send(chb);
+
                     std::vector<uint8_t> payload;
 
                     float temp = -1.0f;
