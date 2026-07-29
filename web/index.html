@@ -343,6 +343,7 @@ function log(msg) {
 		title: "Satellites",
 		items: [
 		  { text: "0xEF", type: "submenu", page: "0xEF" },
+		  { text: "0xD1", type: "submenu", page: "0xD1" },
 		],
 	  },
       "0xEF": {
@@ -386,6 +387,14 @@ function log(msg) {
 			{ text: "Get Gravity", type: "command", console: "tlm {sat} 0x2040" },
 			{ text: "dummy", type: "command", console: " " },
 		],
+	  },
+	  "0xD1": {
+		title: "0xD1 Main Menu",
+		items: [
+			{ text: "Wake From Standby", type: "command", console: "cmd {sat} 0x99 1" },
+			{ text: "Cmd Ping", type: "command", console: "cmd {sat} 0x00 1" },
+			{ text: "Get CPU Temp", type: "command", console: "tlm {sat} 0x03 1" },
+		]
 	  },
 
 
