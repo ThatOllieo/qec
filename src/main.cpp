@@ -392,7 +392,7 @@ int run() {
     //Comms manager is what handles all off board communications, incoming messages become events in the main list, and main thread can
     // simply call functions to request data or send commands elsewhere.
     CommsManager comms(eventList);
-    const uint8_t sat_src = 0xD1; // this device's identifier, reused below for the heartbeat broadcast
+    const uint8_t sat_src = 0xEF; // this device's identifier, reused below for the heartbeat broadcast
     comms.set_src(sat_src);
 
     //TcpConfig tcpcfg;
@@ -403,8 +403,8 @@ int run() {
 
     try {
         UdpConfig udpcfg;
-        //auto udp = std::make_unique<UdpChannel>(udpcfg);
-        //comms.register_channel(std::move(udp));
+        auto udp = std::make_unique<UdpChannel>(udpcfg);
+        comms.register_channel(std::move(udp));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register UDP channel", ex);
@@ -431,8 +431,8 @@ int run() {
         rcfg.pin_dio0  = 25;
         rcfg.spidev    = "/dev/spidev0.1";
 
-        //auto radio = std::make_unique<RadioChannel>(rcfg);
-        //comms.register_channel(std::move(radio));
+        auto radio = std::make_unique<RadioChannel>(rcfg);
+        comms.register_channel(std::move(radio));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register RADIO channel", ex);
@@ -451,8 +451,8 @@ int run() {
         UartRadioConfig urcfg;
         urcfg.device = "/dev/ttyAMA3";
         urcfg.baud = 115200;
-        auto uart_radio = std::make_unique<UartRadioChannel>(urcfg);
-        comms.register_channel(std::move(uart_radio));
+        //auto uart_radio = std::make_unique<UartRadioChannel>(urcfg);
+        //comms.register_channel(std::move(uart_radio));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register UART RADIO channel", ex);
@@ -471,8 +471,8 @@ int run() {
         CanConfig cancfg;
         cancfg.interface = "can0";
         cancfg.sat_src = sat_src;
-        auto can_channel = std::make_unique<CanChannel>(cancfg);
-        comms.register_channel(std::move(can_channel));
+        //auto can_channel = std::make_unique<CanChannel>(cancfg);
+        //comms.register_channel(std::move(can_channel));
     }
     catch (const CommsError& ex) {
         logStartupFailure("COMMS", "Failed to setup and register CAN channel", ex);
@@ -716,14 +716,6 @@ int run() {
                 }
                 // periodic health broadcast
                 case EventType::HeartbeatTick: {
-                    CommsMessage chb;
-                    chb.type = MessageType::I_BRD;
-                    chb.src = sat_src;
-                    chb.dest = 0xF1;
-                    chb.correlation_id = 0;
-                    chb.channel_hint = ChannelId::Auto;
-                    comms.send(chb);
-
                     std::vector<uint8_t> payload;
 
                     float temp = -1.0f;
@@ -733,32 +725,15 @@ int run() {
                     }
                     appendBytes(payload, temp);
 
-                    payload.push_back(static_cast<uint8_t>(cams.state()));
-                    payload.push_back(static_cast<uint8_t>(imu.state()));
-                    payload.push_back(static_cast<uint8_t>(deploy.getState()));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Wifi)));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Radio)));
-                    payload.push_back(static_cast<uint8_t>(comms.channel_state(ChannelId::Uart)));
-
-                    uint32_t uptime = static_cast<uint32_t>(
-                        std::chrono::duration_cast<std::chrono::seconds>(
-                            std::chrono::steady_clock::now() - process_start
-                        ).count()
-                    );
-                    appendBytes(payload, uptime);
-
                     CommsMessage hb;
-                    hb.type = MessageType::I_BRD;
+                    hb.type = MessageType::I_TLM_PT;
                     hb.src = sat_src;
                     hb.dest = 0x01;
                     hb.correlation_id = 0;
+                    hb.command_or_sensor_id = 0x03;
                     hb.payload = payload;
 
-                    //hb.channel_hint = ChannelId::Wifi;
-                    //comms.send(hb);
-                    //hb.channel_hint = ChannelId::Radio;
-                    //comms.send(hb);
-                    hb.channel_hint = ChannelId::Uart;
+                    hb.channel_hint = ChannelId::Auto;
                     comms.send(hb);
 
                     break;
