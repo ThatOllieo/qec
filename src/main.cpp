@@ -175,6 +175,13 @@ bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) 
         if (tok.size() >= 4) {
             hint = parse_u8(tok[3]);
         }
+    
+        std::vector<uint8_t> args;
+        if (tok.size() >= 5) {
+            for (size_t i = 4; i < tok.size(); ++i) {
+                args.push_back(parse_u8(tok[i]));
+            }
+        }
 
         std::vector<uint8_t> args;
         if (tok.size() >= 5) {

@@ -44,7 +44,7 @@
 					<t>20</t>
 				</div>
 				<t id="tiltValueFrom">&nbsp;</t>
-
+				
 				<t>&nbsp;</t><t>&nbsp;</t>
 				<t>Upper Angle</t>
 				<div class="sliderHolder">
@@ -145,7 +145,7 @@ const sliderWheel = document.getElementById("sliderWheel");
 const wheelValue  = document.getElementById("wheelValue");
 sliderWheel.oninput = () => {
 	wheelValue.textContent = sliderWheel.value;
-};
+};	
 
 const adcsMenuUpdateTilt = document.getElementById("adcsMenuUpdateTilt");
 adcsMenuUpdateTilt.onclick = () => {
@@ -484,7 +484,6 @@ function log(msg) {
 			{ text: "Wake From Standby", type: "command", console: "cmd {sat} 0x99" },
 			{ text: "Enter Standby", type: "command", console: "cmd {sat} 0x97"},
 			{ text: "Cmd Ping", type: "command", console: "cmd {sat} 0x00" },
-			{ text: "Get CPU Temp", type: "command", console: "tlm {sat} 0x03 1" },
 		]
 	  },
 
