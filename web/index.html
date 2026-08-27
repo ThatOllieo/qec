@@ -104,7 +104,7 @@
 			</div>
 		</div>
 	</div>
-	
+
 </body>
 <script>
 var flexSelected = "graph"; // or "console
@@ -183,7 +183,7 @@ adcsMenuUpdateWheel.onclick = () => {
 
 <script src="chart.js"></script>
 <script>
-let chart; 
+let chart;
 async function loadCSV(url) {
   const text = await (await fetch(url, { cache: "no-store" })).text();
   const lines = text.trim().split("\n");
@@ -265,7 +265,7 @@ async function refreshGraph() {
 
   chart.update(); // no animation; use chart.update() if you want animation
 }
-	
+
 main();
 </script>
 

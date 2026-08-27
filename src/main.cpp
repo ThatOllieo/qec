@@ -183,6 +183,13 @@ bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) 
             }
         }
 
+        std::vector<uint8_t> args;
+        if (tok.size() >= 5) {
+            for (size_t i = 4; i < tok.size(); ++i) {
+                args.push_back(parse_u8(tok[i]));
+            }
+        }
+
         uint16_t corr = comms.send_command_async(
             dest,
             static_cast<ChannelId>(hint),
