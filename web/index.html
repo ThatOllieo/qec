@@ -26,11 +26,52 @@
 				<t>&nbsp;</t>
 			</div>
 		</div>
-		<div class="imagesContainer">
+		<div class="imagesContainer" id="imagesContainer">
 			<!--<img src="https://placehold.co/1920x1080" class="duoImageL">
 			<img src="https://placehold.co/1920x1080" class="duoImageR">-->
 			<img src="media/left.jpg" class="duoImageL" id="imgLeft">
 			<img src="media/right.jpg" class="duoImageR" id="imgRight">
+		</div>
+		<div class="imagesContainer" id="welcomeScreen">Select a Satellite below.</div>
+		<div class="adcsContainer" id="adcsContainer">
+			<div class="slidersContainer">
+				<t class="bigText" style="margin-top: 15px;">TILT</t>
+				<t>&nbsp;</t><t>&nbsp;</t>
+				<t>Lower Angle</t>
+				<div class="sliderHolder">
+					<t>-20</t>
+					<input type="range" min="-20" max="20" value="0" class="slider" id="sliderTiltFrom">
+					<t>20</t>
+				</div>
+				<t id="tiltValueFrom">&nbsp;</t>
+
+				<t>&nbsp;</t><t>&nbsp;</t>
+				<t>Upper Angle</t>
+				<div class="sliderHolder">
+					<t>-20</t>
+					<input type="range" min="-20" max="20" value="0" class="slider" id="sliderTiltTo">
+					<t>20</t>
+				</div>
+				<t id="tiltValueTo">&nbsp;</t>
+
+				<t>&nbsp;</t><t>&nbsp;</t>
+				<div class="adcsMenuItem" id="adcsMenuUpdateTilt" style="margin-bottom: 15px;">Update Tilt</div>
+			</div>
+
+			<div class="slidersContainer">
+				<t class="bigText" style="margin-top: 15px;">WHEEL</t>
+				<t>&nbsp;</t><t>&nbsp;</t>
+				<t>Speed (Clockwise)</t>
+				<div class="sliderHolder">
+					<t>-255</t>
+					<input type="range" min="-255" max="255" value="0" class="slider" id="sliderWheel">
+					<t>255</t>
+				</div>
+				<t id="wheelValue">&nbsp;</t>
+				<t>&nbsp;</t><t>&nbsp;</t>
+				<div class="adcsMenuItem" id="adcsMenuUpdateWheel" style="margin-bottom: 15px;">Update Wheel</div>
+			</div>
+
 		</div>
 	</div>
 	<div class="lowerTLContainer">
@@ -63,7 +104,7 @@
 			</div>
 		</div>
 	</div>
-	
+
 </body>
 <script>
 var flexSelected = "graph"; // or "console
@@ -90,10 +131,59 @@ consoleButton.onclick = () => {
 	}
 };
 
+const sliderTiltFrom = document.getElementById("sliderTiltFrom");
+const sliderTiltTo   = document.getElementById("sliderTiltTo");
+const tiltValueFrom  = document.getElementById("tiltValueFrom");
+const tiltValueTo    = document.getElementById("tiltValueTo");
+sliderTiltFrom.oninput = () => {
+	tiltValueFrom.textContent = Number(sliderTiltFrom.value);
+};
+sliderTiltTo.oninput = () => {
+	tiltValueTo.textContent = Number(sliderTiltTo.value);
+};
+const sliderWheel = document.getElementById("sliderWheel");
+const wheelValue  = document.getElementById("wheelValue");
+sliderWheel.oninput = () => {
+	wheelValue.textContent = sliderWheel.value;
+};
+
+const adcsMenuUpdateTilt = document.getElementById("adcsMenuUpdateTilt");
+adcsMenuUpdateTilt.onclick = () => {
+	const from = Number(sliderTiltFrom.value) + 128;
+	const to   = Number(sliderTiltTo.value) + 128;
+	if (ws && wsConnected) {
+		ws.send(JSON.stringify({
+			type: "console",
+			message: `cmd ${navStack[1]} 0x3001  1 ${to} ${from}`
+		}));
+		log(`> cmd ${navStack[1]} 0x3001 1 ${to} ${from}`);
+	}
+}
+
+const adcsMenuUpdateWheel = document.getElementById("adcsMenuUpdateWheel");
+adcsMenuUpdateWheel.onclick = () => {
+	let speed = sliderWheel.value;
+	let dir = 0xC;
+	if(speed < 0){
+		speed = -speed;
+		dir = 0xA;
+	}
+
+	if (ws && wsConnected) {
+		ws.send(JSON.stringify({
+			type: "console",
+			message: `cmd ${navStack[1]} 0x2001 1 ${speed} ${dir}`
+		}));
+		log(`> cmd ${navStack[1]} 0x2001 1 ${speed} ${dir}`);
+	}
+}
+
 </script>
+
+
 <script src="chart.js"></script>
 <script>
-let chart; 
+let chart;
 async function loadCSV(url) {
   const text = await (await fetch(url, { cache: "no-store" })).text();
   const lines = text.trim().split("\n");
@@ -175,7 +265,7 @@ async function refreshGraph() {
 
   chart.update(); // no animation; use chart.update() if you want animation
 }
-	
+
 main();
 </script>
 
@@ -342,8 +432,8 @@ function log(msg) {
 	  home: {
 		title: "Satellites",
 		items: [
-		  { text: "0xEF", type: "submenu", page: "0xEF" },
-		  { text: "0xD1", type: "submenu", page: "0xD1" },
+		  { text: "0xEF [BRUCE]", type: "submenu", page: "0xEF" },
+		  { text: "0xD1 [TSAT-1]", type: "submenu", page: "0xD1" },
 		],
 	  },
       "0xEF": {
@@ -391,8 +481,9 @@ function log(msg) {
 	  "0xD1": {
 		title: "0xD1 Main Menu",
 		items: [
-			{ text: "Wake From Standby", type: "command", console: "cmd {sat} 0x99 1" },
-			{ text: "Cmd Ping", type: "command", console: "cmd {sat} 0x00 1" },
+			{ text: "Wake From Standby", type: "command", console: "cmd {sat} 0x99" },
+			{ text: "Enter Standby", type: "command", console: "cmd {sat} 0x97"},
+			{ text: "Cmd Ping", type: "command", console: "cmd {sat} 0x00" },
 			{ text: "Get CPU Temp", type: "command", console: "tlm {sat} 0x03 1" },
 		]
 	  },
@@ -456,6 +547,24 @@ function log(msg) {
 
         menuEl.appendChild(btn);
       }
+
+	  function hideAllScreens(){
+		document.getElementById("adcsContainer").style.display = "none";
+		document.getElementById("imagesContainer").style.display = "none";
+		document.getElementById("welcomeScreen").style.display = "none";
+	  }
+
+	  if(navStack[1] === "0xD1"){
+		hideAllScreens();
+		document.getElementById("adcsContainer").style.display = "flex";
+	  } else if(navStack[1] == "0xEF"){
+		hideAllScreens();
+		document.getElementById("imagesContainer").style.display = "flex";
+	  }
+	  else{
+		hideAllScreens();
+		document.getElementById("welcomeScreen").style.display = "flex";
+	  }
     }
 
     backBtn.addEventListener("click", () => {

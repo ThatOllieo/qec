@@ -123,7 +123,7 @@ bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) 
         uint8_t  dest   = parse_u8(tok[1]);
         uint16_t sensor = parse_u16(tok[2]);
 
-        uint8_t hint = static_cast<uint8_t>(ChannelId::Wifi);
+        uint8_t hint = static_cast<uint8_t>(ChannelId::Auto);
         if (tok.size() >= 4) {
             hint = parse_u8(tok[3]);
         }
@@ -171,16 +171,23 @@ bool cmdLineParse(CommsManager &comms, WSLink &wslink, const std::string &line) 
         uint8_t  dest  = parse_u8(tok[1]);
         uint16_t cmdid = parse_u16(tok[2]);
 
-        uint8_t hint = static_cast<uint8_t>(ChannelId::Wifi);
+        uint8_t hint = static_cast<uint8_t>(ChannelId::Auto);
         if (tok.size() >= 4) {
             hint = parse_u8(tok[3]);
+        }
+
+        std::vector<uint8_t> args;
+        if (tok.size() >= 5) {
+            for (size_t i = 4; i < tok.size(); ++i) {
+                args.push_back(parse_u8(tok[i]));
+            }
         }
 
         uint16_t corr = comms.send_command_async(
             dest,
             static_cast<ChannelId>(hint),
             cmdid,
-            /*args*/{},
+            args,
             std::chrono::milliseconds(1000),
             1
         );
@@ -306,7 +313,8 @@ int run(int argc, char* argv[]) {
     // single failure never kills the thread — mirrors the OBC heartbeat pattern.
     constexpr uint16_t toPoll[] = {0x0003, 0x0001};
     std::thread polling([&]{
-        while (running) {
+        while (false) {
+        //while (running) {
             try {
                 for (uint16_t x : toPoll) {
                     uint16_t corr = comms.request_telem_async(
